@@ -17,6 +17,14 @@ services:
       # host port 22 belongs to the host's own sshd, hence 2222 by default
       - "${BIND_ADDR:-0.0.0.0}:${SSH_PORT:-2222}:22"
       - "${BIND_ADDR:-0.0.0.0}:${INJECT_PORT:-8080}:8080"
+    # Hand the access/error log to the host's journald, which owns rotation
+    # and retention:  journalctl -t ledger -f   (docker compose logs works
+    # too). No journald on the host (Docker Desktop)? Use `driver: local` —
+    # it rotates by default; `json-file` does not.
+    logging:
+      driver: journald
+      options:
+        tag: pickled-claude
     environment:
       INJECT_TOKEN: ${INJECT_TOKEN:-}
       INJECT_ENTER_DELAY: ${INJECT_ENTER_DELAY:-0.5}
