@@ -1,0 +1,10 @@
+#!/bin/bash
+# Attach to the Claude tmux session, (re)creating it if necessary.
+set -euo pipefail
+[ -r /etc/claude-container.conf ] && . /etc/claude-container.conf
+SESSION="${TMUX_SESSION:-claude}"
+if ! tmux has-session -t "=$SESSION" 2>/dev/null; then
+    echo "attach: session '$SESSION' is not running, starting it" >&2
+    start-claude-session
+fi
+exec tmux attach-session -t "=$SESSION"

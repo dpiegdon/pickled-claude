@@ -1,0 +1,6 @@
+.*.swp
+.env
+.swp
+__pycache__/
+authorized_keys
+workspace/

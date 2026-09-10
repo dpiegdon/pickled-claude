@@ -1,0 +1,71 @@
+#!/bin/bash
+# Inject a prompt (or raw keys) into the Claude Code tmux pane.
+#
+#   inject [-n] [-f] TEXT...     paste TEXT into Claude's input, then press Enter
+#   ... | inject [-n] [-f]       same, text read from stdin (arbitrary size and characters)
+#   inject [-f] -k KEY...        send raw tmux key names: Escape, C-c, Enter, Down, y, ...
+#
+#   -n   do not press Enter after pasting
+#   -f   inject even if the pane is not running 'claude' (e.g. it shows a shell prompt)
+#
+# Exit codes: 0 ok, 1 no session, 2 usage, 3 refused because claude is not in the foreground.
+set -euo pipefail
+
+usage() { sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; }
+
+[ -r /etc/claude-container.conf ] && . /etc/claude-container.conf
+TARGET="${TMUX_TARGET:-claude:claude.0}"
+EXPECT="${INJECT_EXPECT_CMD-claude}"
+DELAY="${INJECT_ENTER_DELAY:-0.5}"
+LOCK="${INJECT_LOCK_FILE:-/tmp/claude-inject.lock}"
+
+submit=1 force=0 keys=0
+while getopts ":nfkh" opt; do
+    case "$opt" in
+        n) submit=0 ;;
+        f) force=1 ;;
+        k) keys=1 ;;
+        h) usage; exit 0 ;;
+        *) echo "inject: unknown option -$OPTARG" >&2; usage >&2; exit 2 ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+if [ "$keys" = 1 ]; then
+    [ $# -gt 0 ] || { echo "inject: -k needs at least one key name" >&2; exit 2; }
+else
+    if [ $# -gt 0 ]; then
+        text="$*"
+    else
+        text="$(cat)"
+    fi
+    text="$(printf '%s' "$text")"      # drops trailing newlines
+    [ -n "$text" ] || { echo "inject: nothing to inject" >&2; exit 2; }
+fi
+
+# Serialise with the HTTP injector so text and Enter of two injections never interleave.
+exec 9>>"$LOCK"
+flock 9
+
+if ! current="$(tmux display-message -p -t "$TARGET" '#{pane_current_command}' 2>/dev/null)"; then
+    echo "inject: tmux target '$TARGET' not found (is the session running? try 'attach')" >&2
+    exit 1
+fi
+if [ "$force" = 0 ] && [ -n "$EXPECT" ] && [ "$current" != "$EXPECT" ]; then
+    echo "inject: refusing, the pane is running '$current' instead of '$EXPECT'." >&2
+    echo "        Whatever you inject would go to that program. Use -f to override." >&2
+    exit 3
+fi
+
+if [ "$keys" = 1 ]; then
+    tmux send-keys -t "$TARGET" "$@"
+    exit 0
+fi
+
+# Bracketed paste (-p): multi-line text arrives as one paste instead of newline = submit.
+printf '%s' "$text" | tmux load-buffer -b inject -
+tmux paste-buffer -p -d -b inject -t "$TARGET"
+if [ "$submit" = 1 ]; then
+    sleep "$DELAY"
+    tmux send-keys -t "$TARGET" Enter
+fi

@@ -1,0 +1,15 @@
+#!/bin/bash
+# Print what is currently on the Claude pane, plus N lines of scrollback:  peek [N]
+set -euo pipefail
+[ -r /etc/claude-container.conf ] && . /etc/claude-container.conf
+TARGET="${TMUX_TARGET:-claude:claude.0}"
+lines="${1:-0}"
+case "$lines" in ''|*[!0-9]*) echo "peek: N must be a number" >&2; exit 2 ;; esac
+if ! tmux has-session -t "${TARGET%%:*}" 2>/dev/null; then
+    echo "peek: tmux target '$TARGET' not found (is the session running? try 'attach')" >&2
+    exit 1
+fi
+if [ "$lines" -gt 0 ]; then
+    exec tmux capture-pane -p -t "$TARGET" -S "-$lines"
+fi
+exec tmux capture-pane -p -t "$TARGET"

@@ -1,0 +1,26 @@
+#!/bin/bash
+# Create the tmux session that hosts Claude Code. Idempotent: does nothing if it exists.
+set -euo pipefail
+
+[ -r /etc/claude-container.conf ] && . /etc/claude-container.conf
+SESSION="${TMUX_SESSION:-claude}"
+WORKDIR="${CLAUDE_WORKDIR:-/workspace}"
+
+if tmux has-session -t "=$SESSION" 2>/dev/null; then
+    exit 0
+fi
+
+cmd="claude"
+case "${CLAUDE_SKIP_PERMISSIONS:-1}" in
+    0|false|no|off|FALSE|No|NO|Off|OFF) ;;
+    *) cmd+=" --dangerously-skip-permissions" ;;
+esac
+if [ -n "${CLAUDE_ARGS:-}" ]; then
+    cmd+=" ${CLAUDE_ARGS}"
+fi
+
+# Window 0 is a login shell; the claude command is typed into it so that a shell prompt
+# remains when claude exits (type "claude" to start it again).
+tmux new-session -d -s "$SESSION" -n claude -c "$WORKDIR" -x 200 -y 50
+tmux send-keys -t "=$SESSION:claude.0" "$cmd" Enter
+echo "tmux session '$SESSION' started in $WORKDIR: $cmd"

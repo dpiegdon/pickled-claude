@@ -1,0 +1,45 @@
+# pickled-claude: Claude Code in tmux, inside Docker. Copy .env.example to .env (or run ./setup.sh) first.
+name: pickled-claude
+
+services:
+  claude:
+    build:
+      context: .
+      args:
+        UID: ${UID:-1000}
+        GID: ${GID:-1000}
+    image: pickled-claude:local
+    container_name: pickled-claude
+    hostname: pickled-claude
+    init: true
+    restart: unless-stopped
+    ports:
+      # host port 22 belongs to the host's own sshd, hence 2222 by default
+      - "${BIND_ADDR:-0.0.0.0}:${SSH_PORT:-2222}:22"
+      - "${BIND_ADDR:-0.0.0.0}:${INJECT_PORT:-8080}:8080"
+    environment:
+      INJECT_TOKEN: ${INJECT_TOKEN:-}
+      INJECT_ENTER_DELAY: ${INJECT_ENTER_DELAY:-0.5}
+      CLAUDE_SKIP_PERMISSIONS: ${CLAUDE_SKIP_PERMISSIONS:-1}
+      CLAUDE_ARGS: ${CLAUDE_ARGS:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      DISABLE_AUTOUPDATER: ${DISABLE_AUTOUPDATER:-}
+      AUTHORIZED_KEYS: ${AUTHORIZED_KEYS:-}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - claude-config:/home/claude/.claude      # login, settings, session history, .claude.json
+      - claude-history:/commandhistory          # bash history
+      - ssh-hostkeys:/etc/ssh/hostkeys          # stable SSH host key across recreates
+      - ./workspace:/workspace                  # the project Claude works on
+      - type: bind                              # your SSH public key(s); ./setup.sh creates it
+        source: ./authorized_keys
+        target: /config/authorized_keys
+        read_only: true
+        bind:
+          create_host_path: false
+
+volumes:
+  claude-config:
+  claude-history:
+  ssh-hostkeys:
