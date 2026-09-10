@@ -35,6 +35,8 @@ COPY container/profile.d/ /etc/profile.d/
 COPY container/bin/ container/entrypoint.sh container/inject-server.py /usr/local/bin/
 COPY container/bashrc-snippet.sh /tmp/bashrc-snippet.sh
 RUN chmod 0755 /usr/local/bin/* \
+    && chmod 0644 /etc/tmux.conf /etc/ssh/sshd_config.d/10-claude.conf \
+                  /etc/profile.d/10-claude-env.sh /etc/profile.d/99-tmux-autoattach.sh \
     && cat /tmp/bashrc-snippet.sh >> /home/claude/.bashrc && rm /tmp/bashrc-snippet.sh
 
 # Persistent bash history (same approach as Anthropic's reference devcontainer),
