@@ -63,8 +63,10 @@ firewall (see "Optional add-ons").
 
 ### Process model (entrypoint.sh, runs as root)
 
-0. Write `/etc/claude-container.conf` (tmux target, expected command, Enter delay) so the
-   SSH helper scripts and the HTTP server share one configuration.
+0. Write `/etc/claude-container.conf` (tmux target, expected command, Enter delay, and the
+   `CLAUDE_*` settings that shape the claude command) so the SSH helper scripts and the HTTP
+   server share one configuration. sshd gives a login shell a clean environment, so a session
+   restarted by `attach` over SSH would otherwise use different flags than the entrypoint's.
 1. Generate SSH host keys into the volume if missing.
 2. Assemble `~claude/.ssh/authorized_keys` from `/config/authorized_keys` and the optional
    `AUTHORIZED_KEYS` env var, fix permissions.
@@ -74,6 +76,13 @@ firewall (see "Optional add-ons").
    login bash in `/workspace`, then types `claude $CLAUDE_ARGS` + Enter into it.
    When `claude` exits you get the shell back instead of a dead session; `attach` restarts
    the session if it is gone.
+   The tmux server dies with the container, so a restart always builds a new session. The
+   conversation is restored instead: if `$CLAUDE_CONFIG_DIR/projects/<workdir slug>/` already
+   holds a transcript, the typed command is `claude --continue`. The slug is the working
+   directory with every non-alphanumeric character replaced by `-`, e.g. `-workspace`, and the
+   directory sits in the `claude-config` volume. A first start finds no transcript and begins a
+   new conversation; `CLAUDE_CONTINUE=0`, or an explicit `--continue`/`--resume` in
+   `CLAUDE_ARGS`, takes the decision away from the script.
 5. As user `claude`: `inject-server.py` on `0.0.0.0:8080` (skipped with a loud warning when
    `INJECT_TOKEN` is empty).
 6. `wait -n`; if sshd or the injector dies the container exits and compose restarts it.
@@ -191,6 +200,8 @@ claude-container/
     profile.d/10-claude-env.sh, 99-tmux-autoattach.sh
     bashrc-snippet.sh     (history + env, appended to ~claude/.bashrc)
     bin/inject, peek, attach, start-claude-session
+  tests/
+    start-claude-session.test.sh   which claude command lands in the tmux window
 ```
 
 ## Decisions (2026-09-10)
@@ -200,3 +211,10 @@ claude-container/
    `INJECT_PORT` (default 8080) configurable, `BIND_ADDR` to restrict.
 3. No egress firewall.
 4. Debian 13 trixie.
+5. A restart continues the last conversation of the working directory (`claude --continue`)
+   rather than resuming a session id pinned at first start. If somebody exits `claude` and
+   starts a new conversation by hand in the tmux window, that newer one is the one a restart
+   should come back to; a pinned id would keep dragging the original session along.
+   With several conversations in one directory, `--continue` takes the one with the most recent
+   activity (not the oldest, and not the one the tmux window happened to run), and it keeps the
+   session id, so after the first restart that choice stays stable.

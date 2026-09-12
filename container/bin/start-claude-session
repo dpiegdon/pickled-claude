@@ -2,7 +2,8 @@
 # Create the tmux session that hosts Claude Code. Idempotent: does nothing if it exists.
 set -euo pipefail
 
-[ -r /etc/claude-container.conf ] && . /etc/claude-container.conf
+CONF="${CLAUDE_CONTAINER_CONF:-/etc/claude-container.conf}"
+[ -r "$CONF" ] && . "$CONF"
 SESSION="${TMUX_SESSION:-claude}"
 WORKDIR="${CLAUDE_WORKDIR:-/workspace}"
 
@@ -15,6 +16,31 @@ case "${CLAUDE_SKIP_PERMISSIONS:-1}" in
     0|false|no|off|FALSE|No|NO|Off|OFF) ;;
     *) cmd+=" --dangerously-skip-permissions" ;;
 esac
+
+# Pick up the conversation from before the restart, if there was one: Claude Code keeps the
+# transcripts of a working directory in $CLAUDE_CONFIG_DIR/projects/SLUG/*.jsonl (SLUG is the
+# path with every character that is not a letter or digit replaced by "-"), and that directory
+# lives in the claude-config volume, so it outlives the container. Without a transcript there
+# is nothing to continue and plain "claude" starts fresh. CLAUDE_CONTINUE=0 always starts fresh.
+note=""
+case "${CLAUDE_CONTINUE:-1}" in
+    0|false|no|off|FALSE|No|NO|Off|OFF) ;;
+    *)
+        case " ${CLAUDE_ARGS:-} " in
+            *" --continue "*|*" -c "*|*" --resume "*|*" -r "*)
+                ;;                                  # CLAUDE_ARGS already says what to resume
+            *)
+                projects="${CLAUDE_CONFIG_DIR:-${HOME:-/home/claude}/.claude}/projects"
+                slug=$(printf '%s' "$WORKDIR" | sed 's/[^a-zA-Z0-9]/-/g')
+                if compgen -G "$projects/$slug/*.jsonl" > /dev/null; then
+                    cmd+=" --continue"
+                    note=" (continuing the previous conversation)"
+                fi
+                ;;
+        esac
+        ;;
+esac
+
 if [ -n "${CLAUDE_ARGS:-}" ]; then
     cmd+=" ${CLAUDE_ARGS}"
 fi
@@ -23,4 +49,4 @@ fi
 # remains when claude exits (type "claude" to start it again).
 tmux new-session -d -s "$SESSION" -n claude -c "$WORKDIR" -x 200 -y 50
 tmux send-keys -t "=$SESSION:claude.0" "$cmd" Enter
-echo "tmux session '$SESSION' started in $WORKDIR: $cmd"
+echo "tmux session '$SESSION' started in $WORKDIR: $cmd$note"

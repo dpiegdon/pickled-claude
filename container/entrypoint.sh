@@ -21,6 +21,17 @@ INJECT_EXPECT_CMD=${INJECT_EXPECT_CMD-claude}
 INJECT_ENTER_DELAY=${INJECT_ENTER_DELAY:-0.5}
 CONF
 
+# sshd hands a login shell a clean environment, so the settings that shape the claude command
+# must travel through this file too: otherwise a session restarted by "attach" over SSH would
+# use different flags than the one the entrypoint starts.
+{
+    printf 'CLAUDE_WORKDIR=%q\n'          "${CLAUDE_WORKDIR:-/workspace}"
+    printf 'CLAUDE_CONFIG_DIR=%q\n'       "${CLAUDE_CONFIG_DIR:-$HOME_DIR/.claude}"
+    printf 'CLAUDE_SKIP_PERMISSIONS=%q\n' "${CLAUDE_SKIP_PERMISSIONS:-1}"
+    printf 'CLAUDE_CONTINUE=%q\n'         "${CLAUDE_CONTINUE:-1}"
+    printf 'CLAUDE_ARGS=%q\n'             "${CLAUDE_ARGS:-}"
+} >> /etc/claude-container.conf
+
 # ---- timezone -----------------------------------------------------------------------------
 if [ -n "${TZ:-}" ] && [ -f "/usr/share/zoneinfo/$TZ" ]; then
     ln -sf "/usr/share/zoneinfo/$TZ" /etc/localtime

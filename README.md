@@ -103,7 +103,8 @@ Responses are JSON: `{"ok": true, "chars": 30, "lines": 1, "submitted": true}` o
 | `INJECT_PORT` | 8080 | host port for the HTTP API |
 | `BIND_ADDR` | 0.0.0.0 | `127.0.0.1` to expose both ports only on the host |
 | `CLAUDE_SKIP_PERMISSIONS` | 1 | start Claude with `--dangerously-skip-permissions`. `0` for normal prompts |
-| `CLAUDE_ARGS` | empty | extra `claude` arguments, e.g. `--continue`, `--model opus` |
+| `CLAUDE_CONTINUE` | 1 | after a restart, continue the conversation the container was running before. `0` always starts a new one |
+| `CLAUDE_ARGS` | empty | extra `claude` arguments, e.g. `--model opus`. An explicit `--continue`/`--resume` overrides `CLAUDE_CONTINUE` |
 | `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` | empty | non-interactive login |
 | `DISABLE_AUTOUPDATER` | empty | `1` pins the version baked into the image |
 | `UID`, `GID` | 1000 | in-container user; build args, rebuild after changing |
@@ -111,8 +112,11 @@ Responses are JSON: `{"ok": true, "chars": 30, "lines": 1, "submitted": true}` o
 | `INJECT_ENTER_DELAY` | 0.5 | seconds between paste and Enter |
 | `TZ` | UTC | container time zone |
 
-Changes to `.env` take effect with `docker compose up -d` (recreates the container, which
-ends the current Claude conversation; `CLAUDE_ARGS=--continue` resumes it).
+Changes to `.env` take effect with `docker compose up -d`, which recreates the container.
+The running `claude` process does not survive that, but the conversation does: the new
+container starts `claude --continue` and picks it up where it stopped (`CLAUDE_CONTINUE=0`
+if you would rather start fresh every time). If you ran several conversations in `/workspace`,
+the one you used last is the one that comes back; `/resume` inside Claude switches to another.
 
 ## What persists where
 
@@ -147,8 +151,13 @@ into the image. Set `DISABLE_AUTOUPDATER=1` if you want the image to be the only
 ## Troubleshooting
 
 - **Injected text appears in the input box but is not submitted**: raise `INJECT_ENTER_DELAY`.
-- **`inject` says the pane is running `bash`**: Claude exited. Attach and type `claude`, or
-  `ssh ... inject -f claude`.
+- **`inject` says the pane is running `bash`**: Claude exited. Attach and type `claude`
+  (`claude --continue` picks up the conversation), or `ssh ... inject -f claude`.
+- **A restart began a new conversation instead of continuing the old one**: conversations belong
+  to a working directory, so the transcript has to be there. Check with
+  `docker compose exec claude ls /home/claude/.claude/projects/-workspace`. An empty or missing
+  directory means there was nothing to continue, most likely because the volume `claude-config`
+  was removed by `docker compose down -v`.
 - **`inject` refuses with an unexpected program name** (for example after a Claude Code update
   changes how the process is named): set `INJECT_EXPECT_CMD=<that name>` in the container
   environment, or `INJECT_EXPECT_CMD=` to disable the check.
@@ -171,4 +180,5 @@ container/
   inject-server.py       HTTP API (python3 stdlib only)
   bin/inject, peek, attach, start-claude-session
   sshd.conf, tmux.conf, profile.d/, bashrc-snippet.sh
+tests/                   shell tests, run them with ./tests/start-claude-session.test.sh
 ```
