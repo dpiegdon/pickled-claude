@@ -37,7 +37,10 @@ services:
       AUTHORIZED_KEYS: ${AUTHORIZED_KEYS:-}
       TZ: ${TZ:-UTC}
     volumes:
-      - claude-config:/home/claude/.claude      # login, settings, session history, .claude.json
+      - claude-config:/home/claude/.claude      # login, settings, .claude.json
+      # Mounted inside claude-config: the conversations, so they can be dropped on their own
+      # ("docker volume rm pickled-claude_claude-sessions") without touching the login.
+      - claude-sessions:/home/claude/.claude/projects
       - claude-history:/commandhistory          # bash history
       - ssh-hostkeys:/etc/ssh/hostkeys          # stable SSH host key across recreates
       - ./workspace:/workspace                  # the project Claude works on
@@ -50,5 +53,6 @@ services:
 
 volumes:
   claude-config:
+  claude-sessions:
   claude-history:
   ssh-hostkeys:

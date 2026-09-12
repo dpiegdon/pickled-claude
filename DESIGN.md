@@ -34,6 +34,7 @@ firewall (see "Optional add-ons").
    Authorization: Bearer <token>       PUT/POST /prompt, POST /keys, GET /screen, GET /health
 
  volumes: claude-config -> /home/claude/.claude   (+ CLAUDE_CONFIG_DIR, keeps .claude.json)
+          claude-sessions -> /home/claude/.claude/projects  (conversations, nested in the above)
           claude-history -> /commandhistory       (bash history, as in Anthropic's reference)
           ssh-hostkeys   -> /etc/ssh/hostkeys     (stable host key across recreates)
           ./workspace    -> /workspace            (bind mount, the project Claude works on)
@@ -80,7 +81,7 @@ firewall (see "Optional add-ons").
    conversation is restored instead: if `$CLAUDE_CONFIG_DIR/projects/<workdir slug>/` already
    holds a transcript, the typed command is `claude --continue`. The slug is the working
    directory with every non-alphanumeric character replaced by `-`, e.g. `-workspace`, and the
-   directory sits in the `claude-config` volume. A first start finds no transcript and begins a
+   directory sits in the `claude-sessions` volume. A first start finds no transcript and begins a
    new conversation; `CLAUDE_CONTINUE=0`, or an explicit `--continue`/`--resume` in
    `CLAUDE_ARGS`, takes the decision away from the script.
 5. As user `claude`: `inject-server.py` on `0.0.0.0:8080` (skipped with a loud warning when
@@ -218,3 +219,9 @@ claude-container/
    With several conversations in one directory, `--continue` takes the one with the most recent
    activity (not the oldest, and not the one the tmux window happened to run), and it keeps the
    session id, so after the first restart that choice stays stable.
+6. The conversations get their own volume, `claude-sessions`, mounted at `projects/` inside the
+   `claude-config` volume. Docker mounts the parent first, so the two nest without a symlink.
+   Dropping all conversations is then one `docker volume rm` and leaves `.credentials.json`,
+   `.claude.json` and the settings untouched. What stays behind in `claude-config` is
+   per-session scratch that Claude Code expires on its own: `file-history/`, `session-env/`,
+   `jobs/` and the prompt history in `history.jsonl`.

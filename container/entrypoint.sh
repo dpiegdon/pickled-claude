@@ -66,7 +66,8 @@ else
 fi
 
 # ---- writable volumes ---------------------------------------------------------------------------
-for dir in "$HOME_DIR/.claude" /commandhistory /workspace; do
+for dir in "$HOME_DIR/.claude" "$HOME_DIR/.claude/projects" /commandhistory /workspace; do
+    mkdir -p "$dir"          # a volume mount always exists, a plain path may not
     if ! runuser -u "$USER_NAME" -- test -w "$dir"; then
         log "making $dir writable for $USER_NAME"
         chown "$USER_NAME:$USER_NAME" "$dir"

@@ -122,14 +122,37 @@ the one you used last is the one that comes back; `/resume` inside Claude switch
 
 | data | location | survives |
 | --- | --- | --- |
-| login, settings, conversation history, per-project trust | volume `claude-config` at `/home/claude/.claude` (`CLAUDE_CONFIG_DIR`) | recreate and image rebuild |
+| login, settings, per-project trust | volume `claude-config` at `/home/claude/.claude` (`CLAUDE_CONFIG_DIR`) | recreate and image rebuild |
+| conversations (what `--continue` and `/resume` read) | volume `claude-sessions` at `/home/claude/.claude/projects` | recreate and image rebuild |
 | bash history | volume `claude-history` | recreate and image rebuild |
 | SSH host key | volume `ssh-hostkeys` | recreate and image rebuild |
 | your project | bind mount `./workspace` at `/workspace` | everything |
 | packages Claude installed with apt/pip/npm | container layer | `restart`, but not recreate |
 
 Put tools you always want into the `Dockerfile` (the apt line) and rebuild.
-Wipe the Claude login with `docker compose down -v` (removes all three volumes).
+`docker compose down -v` removes all four volumes, login included.
+
+### Clearing old sessions
+
+The conversations live in a volume of their own, so they can go without taking the login,
+the settings or the per-project trust with them. All of them at once:
+
+```bash
+docker compose down
+docker volume rm pickled-claude_claude-sessions
+docker compose up -d                     # next start has no conversation to continue
+```
+
+Or only the conversations of one working directory, with the container running. `/workspace`
+is stored as `-workspace`, every character that is not a letter or digit becomes a `-`:
+
+```bash
+docker compose exec claude ls /home/claude/.claude/projects
+docker compose exec claude rm -rf /home/claude/.claude/projects/-workspace
+```
+
+Deleting the transcript of the conversation that is open right now confuses the running
+`claude`, so exit it first, or leave that one file alone.
 
 ## Updating Claude Code
 
@@ -156,8 +179,8 @@ into the image. Set `DISABLE_AUTOUPDATER=1` if you want the image to be the only
 - **A restart began a new conversation instead of continuing the old one**: conversations belong
   to a working directory, so the transcript has to be there. Check with
   `docker compose exec claude ls /home/claude/.claude/projects/-workspace`. An empty or missing
-  directory means there was nothing to continue, most likely because the volume `claude-config`
-  was removed by `docker compose down -v`.
+  directory means there was nothing to continue, most likely because the volume `claude-sessions`
+  was removed.
 - **`inject` refuses with an unexpected program name** (for example after a Claude Code update
   changes how the process is named): set `INJECT_EXPECT_CMD=<that name>` in the container
   environment, or `INJECT_EXPECT_CMD=` to disable the check.

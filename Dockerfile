@@ -41,7 +41,9 @@ RUN chmod 0755 /usr/local/bin/* \
 
 # Persistent bash history (same approach as Anthropic's reference devcontainer),
 # workspace, and the Claude config dir that becomes a named volume.
-RUN mkdir -p /commandhistory /workspace /home/claude/.claude \
+# /home/claude/.claude/projects is a mount point of its own (volume claude-sessions); creating
+# it here with the right owner means a freshly created volume starts out writable for claude.
+RUN mkdir -p /commandhistory /workspace /home/claude/.claude/projects \
     && touch /commandhistory/.bash_history \
     && chown -R "$UID:$GID" /commandhistory /workspace /home/claude/.claude
 
