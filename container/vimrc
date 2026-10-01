@@ -1,0 +1,4 @@
+set bg=dark
+set incsearch
+set hlsearch
+syntax on

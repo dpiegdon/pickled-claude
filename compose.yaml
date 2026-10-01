@@ -10,7 +10,7 @@ services:
         GID: ${GID:-1000}
     image: pickled-claude:local
     container_name: pickled-claude
-    hostname: pickled-claude
+    hostname: pickle
     init: true
     restart: unless-stopped
     ports:
@@ -31,6 +31,8 @@ services:
       CLAUDE_SKIP_PERMISSIONS: ${CLAUDE_SKIP_PERMISSIONS:-1}
       CLAUDE_CONTINUE: ${CLAUDE_CONTINUE:-}
       CLAUDE_ARGS: ${CLAUDE_ARGS:-}
+      CLAUDE_CODE_DISABLE_MOUSE: ${CLAUDE_CODE_DISABLE_MOUSE:-0}
+      CLAUDE_CODE_NO_FLICKER: ${CLAUDE_CODE_NO_FLICKER:-1}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       DISABLE_AUTOUPDATER: ${DISABLE_AUTOUPDATER:-}

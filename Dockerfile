@@ -10,9 +10,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
     TZ=UTC
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl wget gnupg git sudo \
+        ca-certificates curl wget gnupg git tig vim-nox sudo \
         tmux ncurses-term openssh-server \
-        python3 procps psmisc less nano jq unzip zip xz-utils file iproute2 tzdata \
+        python3 python3-pip procps psmisc \
+	less nano jq unzip zip xz-utils file iproute2 tzdata \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Unprivileged user "claude" with passwordless sudo, so Claude can install packages on demand.
@@ -34,10 +35,12 @@ COPY container/tmux.conf /etc/tmux.conf
 COPY container/profile.d/ /etc/profile.d/
 COPY container/bin/ container/entrypoint.sh container/inject-server.py /usr/local/bin/
 COPY container/bashrc-snippet.sh /tmp/bashrc-snippet.sh
+COPY container/vimrc /tmp/vimrc
 RUN chmod 0755 /usr/local/bin/* \
     && chmod 0644 /etc/tmux.conf /etc/ssh/sshd_config.d/10-claude.conf \
                   /etc/profile.d/10-claude-env.sh /etc/profile.d/99-tmux-autoattach.sh \
-    && cat /tmp/bashrc-snippet.sh >> /home/claude/.bashrc && rm /tmp/bashrc-snippet.sh
+    && cat /tmp/bashrc-snippet.sh >> /home/claude/.bashrc && rm /tmp/bashrc-snippet.sh \
+    && cat /tmp/vimrc >> /home/claude/.vimrc && rm /tmp/vimrc
 
 # Persistent bash history (same approach as Anthropic's reference devcontainer),
 # workspace, and the Claude config dir that becomes a named volume.
