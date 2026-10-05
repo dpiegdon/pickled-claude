@@ -1,6 +1,7 @@
 .*.swp
 .env
 .swp
+.volume_*
 __pycache__/
 authorized_keys
 workspace/

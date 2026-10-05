@@ -32,10 +32,18 @@ mkdir -p workspace
 
 # shellcheck disable=SC1091
 SSH_PORT=$(sed -n 's/^SSH_PORT=//p' .env); SSH_PORT=${SSH_PORT:-2222}
+
+docker build \
+	--network host \
+	--progress plain \
+	--no-cache \
+	.
+
+
 cat <<MSG
 
 Next:
-  docker compose up -d --build        # build the image and start the container
-  docker compose logs -f              # watch until "tmux session 'claude' started"
-  ssh -p $SSH_PORT claude@localhost          # attach to the Claude session (Ctrl-b d to detach)
+  docker compose up -d                  # start container
+  docker compose logs -f                # watch until "tmux session 'claude' started"
+  ssh -p $SSH_PORT claude@localhost     # attach to the Claude session (Ctrl-b d to detach)
 MSG

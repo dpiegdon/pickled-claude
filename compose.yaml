@@ -38,23 +38,54 @@ services:
       DISABLE_AUTOUPDATER: ${DISABLE_AUTOUPDATER:-}
       AUTHORIZED_KEYS: ${AUTHORIZED_KEYS:-}
       TZ: ${TZ:-UTC}
-    volumes:
-      - claude-config:/home/claude/.claude      # login, settings, .claude.json
-      # Mounted inside claude-config: the conversations, so they can be dropped on their own
-      # ("docker volume rm pickled-claude_claude-sessions") without touching the login.
-      - claude-sessions:/home/claude/.claude/projects
-      - claude-history:/commandhistory          # bash history
-      - ssh-hostkeys:/etc/ssh/hostkeys          # stable SSH host key across recreates
-      - ./workspace:/workspace                  # the project Claude works on
-      - type: bind                              # your SSH public key(s); ./setup.sh creates it
-        source: ./authorized_keys
+    configs:
+      - source: authorized_keys
         target: /config/authorized_keys
-        read_only: true
-        bind:
-          create_host_path: false
+    volumes:
+      - claude-history:/commandhistory
+      - claude-config:/home/claude/.claude
+      - claude-sessions:/home/claude/.claude/projects
+      - claude-ssh-hostkeys:/etc/ssh/hostkeys
+      - claude-workspace:/workspace
+
+configs:
+  authorized_keys:
+    file: ./authorized_keys
 
 volumes:
-  claude-config:
-  claude-sessions:
   claude-history:
-  ssh-hostkeys:
+      # bash history
+      driver: local
+      driver_opts:
+        type: none
+        o: bind
+        device: ./.volume_commandhistory
+  claude-config:
+      # login, settings, .claude.json
+      driver: local
+      driver_opts:
+        type: none
+        o: bind
+        device: ./.volume_config
+  claude-sessions:
+      # Mounted inside claude-config: the conversations, so they can be dropped on their own
+      # ("docker volume rm pickled-claude_claude-sessions") without touching the login.
+      driver: local
+      driver_opts:
+        type: none
+        o: bind
+        device: ./.volume_sessions
+  claude-ssh-hostkeys:
+      # stable SSH host key across recreates
+      driver: local
+      driver_opts:
+        type: none
+        o: bind
+        device: ./.volume_ssh_hostkeys
+  claude-workspace:
+      # the projects Claude works on
+      driver: local
+      driver_opts:
+        type: none
+        o: bind
+        device: ./workspace
