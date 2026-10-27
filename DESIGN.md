@@ -10,15 +10,18 @@ Status: agreed 2026-09-10, implemented. Decisions: skip-permissions on by defaul
 - Inject prompts without attaching: via SSH command (`ssh ... inject "text"`) and via HTTP
   (`PUT /prompt`) protected by a bearer token.
 - Survive container restarts: login, settings, per-project trust, shell history and SSH host
-  keys are persisted. The workspace is a bind mount from the host.
+  keys are persisted in the instance directory, as is the workspace.
 
-Non-goals (for now): multiple parallel Claude sessions, a web terminal, a network egress
+- Several independent instances on one host, each run from its own directory with its own
+  `.env` and state (see "Instances").
+
+Non-goals (for now): multiple Claude sessions inside one container, a web terminal, a network egress
 firewall (see "Optional add-ons").
 
 ## Architecture
 
 ```
- host / LAN                          container "pickled-claude" (debian:trixie-slim)
+ host / LAN                          container "<instance>-claude-1" (debian:trixie-slim)
  ------------                        ------------------------------------------------
                                      tini (init) -> entrypoint.sh (root)
  ssh -p 2222 claude@host  ------->   sshd :22 (key auth only, user "claude")
@@ -27,18 +30,19 @@ firewall (see "Optional add-ons").
    ssh ... peek                         |
                                         v
                                      tmux server (uid claude)  session "claude"
-                                        window 0: login bash -> `claude $CLAUDE_ARGS`
+                                        window 1: login bash -> `claude $CLAUDE_ARGS`
                                         cwd /workspace
                                         ^
  curl -X PUT :8080/prompt  ------->  inject-server.py :8080 (uid claude, python3 stdlib)
    Authorization: Bearer <token>       PUT/POST /prompt, POST /keys, GET /screen, GET /health
 
- volumes: claude-config -> /home/claude/.claude   (+ CLAUDE_CONFIG_DIR, keeps .claude.json)
-          claude-sessions -> /home/claude/.claude/projects  (conversations, nested in the above)
-          claude-history -> /commandhistory       (bash history, as in Anthropic's reference)
-          ssh-hostkeys   -> /etc/ssh/hostkeys     (stable host key across recreates)
-          ./workspace    -> /workspace            (bind mount, the project Claude works on)
-          ./authorized_keys -> /config/authorized_keys (ro, copied in at start)
+ bind mounts from the instance directory:
+          .volume_config/         -> /home/claude/.claude   (+ CLAUDE_CONFIG_DIR, keeps .claude.json)
+          .volume_sessions/       -> /home/claude/.claude/projects  (conversations, nested in the above)
+          .volume_commandhistory/ -> /commandhistory   (bash history, as in Anthropic's reference)
+          .volume_ssh_hostkeys/   -> /etc/ssh/hostkeys (stable host key across recreates)
+          workspace/              -> /workspace        (the project Claude works on)
+          authorized_keys         -> /config/authorized_keys (compose config, copied in at start)
 ```
 
 ## Components
@@ -58,7 +62,7 @@ firewall (see "Optional add-ons").
 - sshd: `PasswordAuthentication no`, `PermitRootLogin no`, `AllowUsers claude`, host keys read
   from `/etc/ssh/hostkeys`; the keys baked in by the Debian package are deleted at build time.
   `pam_loginuid` set to optional (fails inside containers otherwise).
-- `/etc/tmux.conf`: `tmux-256color`, truecolor, `escape-time 10` (Esc must be instant for
+- `/etc/tmux.conf`: `tmux-256color`, truecolor, `escape-time 0` (Esc must be instant for
   Claude Code), big scrollback, extended keys (Shift+Enter passthrough).
 - `LANG=C.UTF-8` for both docker-started and ssh-started processes (`/etc/default/locale`).
 
@@ -73,7 +77,7 @@ firewall (see "Optional add-ons").
    `AUTHORIZED_KEYS` env var, fix permissions.
 3. Start `sshd -D -e` in the background.
 4. As user `claude` (with `INJECT_TOKEN` stripped from the environment so it is not visible to
-   the Claude session): `start-claude-session` creates tmux session `claude`, window 0 with a
+   the Claude session): `start-claude-session` creates tmux session `claude`, window 1 with a
    login bash in `/workspace`, then types `claude $CLAUDE_ARGS` + Enter into it.
    When `claude` exits you get the shell back instead of a dead session; `attach` restarts
    the session if it is gone.
@@ -81,7 +85,7 @@ firewall (see "Optional add-ons").
    conversation is restored instead: if `$CLAUDE_CONFIG_DIR/projects/<workdir slug>/` already
    holds a transcript, the typed command is `claude --continue`. The slug is the working
    directory with every non-alphanumeric character replaced by `-`, e.g. `-workspace`, and the
-   directory sits in the `claude-sessions` volume. A first start finds no transcript and begins a
+   directory sits in `.volume_sessions/`. A first start finds no transcript and begins a
    new conversation; `CLAUDE_CONTINUE=0`, or an explicit `--continue`/`--resume` in
    `CLAUDE_ARGS`, takes the decision away from the script.
 5. As user `claude`: `inject-server.py` on `0.0.0.0:8080` (skipped with a loud warning when
@@ -148,23 +152,56 @@ Example: `curl -X PUT -H "Authorization: Bearer $TOKEN" --data-binary @prompt.tx
 
 | variable | default | meaning |
 | --- | --- | --- |
-| `INJECT_TOKEN` | (required for HTTP) | bearer token; `setup.sh` generates one |
+| `COMPOSE_PROJECT_NAME` | directory name | instance name; `pickled-claude init` sets a unique one |
+| `INJECT_TOKEN` | (required for HTTP) | bearer token; `pickled-claude init` generates one |
 | `CLAUDE_SKIP_PERMISSIONS` | 1 | start with `--dangerously-skip-permissions`; `0` = normal permission prompts |
 | `CLAUDE_ARGS` | empty | extra args, e.g. `--continue`, `--model ...` |
 | `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` | empty | non-interactive auth; otherwise attach once and `/login` |
 | `SSH_PORT` / `INJECT_PORT` | 2222 / 8080 | host ports |
-| `BIND_ADDR` | 0.0.0.0 | set `127.0.0.1` to expose only on the host |
+| `BIND_ADDR` | 127.0.0.1 | set `0.0.0.0` to expose to the network |
 | `UID` / `GID` | 1000 / 1000 | in-container user, build args |
 | `TZ` | UTC | |
 | `DISABLE_AUTOUPDATER` | empty | set `1` to pin the image's version |
 
-Helper `setup.sh`: creates `.env` with a random token and your uid/gid, copies your public
-key into `./authorized_keys`, creates `./workspace`. Then `docker compose up -d --build`.
+`pickled-claude init DIR` creates `.env` with a unique instance name, free ports, a random token
+and your uid/gid, copies your public keys into `authorized_keys`, creates `workspace/` and the
+`.volume_*/` directories. Then `pickled-claude up -d --build` from DIR.
+
+### Instances
+
+An instance is a directory; the repository holds only the code. The wrapper `pickled-claude`
+(repo root, symlinked into the PATH) finds the repository through its own path and the
+instance through `$PWD` or `-C DIR`, and runs
+
+```
+PICKLED_CLAUDE_SRC=$REPO docker compose -f $REPO/compose.yaml \
+    --project-directory $INSTANCE --env-file $INSTANCE/.env -p $COMPOSE_PROJECT_NAME ...
+```
+
+`--project-directory` makes compose resolve every relative path (bind mounts, the
+`authorized_keys` config) against the instance. The build context is
+`${PICKLED_CLAUDE_SRC:-.}`, so it still points at the repository, and plain `docker compose`
+in the repository keeps working with the repository as its instance.
+
+What keeps instances apart: no fixed `name`/`container_name` in `compose.yaml`; the project name
+comes from the instance's `.env`; host ports are per instance and `init` picks free ones
+(nothing listening, not claimed by another instance's `.env`); the journald tag is the
+container name. Instances share the image `pickled-claude:<UID>-<GID>`, one per user, so
+instances for different users do not overwrite each other's image.
+
+Known instances are listed in `~/.config/pickled-claude/instances` (written by `init` and by
+every wrapper command), plus whatever containers carry this repository's compose file in their
+compose labels. `pickled-claude ls` and the port and name checks of `init` read both.
+`pickled-claude ssh` uses the instance's port and `HostKeyAlias=<instance name>`, so
+`known_hosts` keeps one entry per instance rather than per port.
 
 ## Security notes
 
-- SSH is key-only, root login disabled. The HTTP token travels in plaintext; keep 8080 on
-  localhost or a trusted network, or put a TLS reverse proxy in front.
+- SSH is key-only, root login disabled. Both ports bind to localhost by default. The HTTP
+  token travels in plaintext and grants root in the container (skip-permissions + sudo);
+  expose it only on a trusted network, or put a TLS reverse proxy in front.
+- `INJECT_TOKEN` is kept out of the Claude session's environment, but the injector runs as
+  the same user, so the session could read it from `/proc`. Not a secret boundary.
 - Do not mount `~/.ssh` or cloud credentials into the container (Anthropic's warning applies:
   a bypassed session can exfiltrate anything inside the container, including `~/.claude`).
 - `--dangerously-skip-permissions` is the default because Claude runs as non-root inside the
@@ -184,15 +221,14 @@ key into `./authorized_keys`, creates `./workspace`. Then `docker compose up -d 
 ## File layout
 
 ```
-claude-container/
+pickled-claude/
   Dockerfile
   compose.yaml
-  .env.example            -> .env (gitignored)
-  authorized_keys         (gitignored, created by setup.sh)
-  setup.sh
+  .env.example            -> <instance>/.env
+  pickled-claude          wrapper: init, ssh, ls, everything else docker compose
   README.md
   DESIGN.md
-  workspace/              (gitignored, bind-mounted to /workspace)
+  AGENDA.md
   container/
     entrypoint.sh
     inject-server.py
@@ -203,13 +239,19 @@ claude-container/
     bin/inject, peek, attach, start-claude-session
   tests/
     start-claude-session.test.sh   which claude command lands in the tmux window
+    pickled-claude.test.sh         wrapper: instance setup, compose/ssh invocations
+
+<instance>/               (any directory; the repository itself works too, all gitignored)
+  .env  authorized_keys  workspace/
+  .volume_config/  .volume_sessions/  .volume_commandhistory/  .volume_ssh_hostkeys/
 ```
 
 ## Decisions (2026-09-10)
 
 1. Permission mode: `--dangerously-skip-permissions` on by default, `CLAUDE_SKIP_PERMISSIONS=0` disables.
-2. Ports: all interfaces, `SSH_PORT` (default 2222, host port 22 belongs to the host's sshd) and
-   `INJECT_PORT` (default 8080) configurable, `BIND_ADDR` to restrict.
+2. Ports: `SSH_PORT` (default 2222, host port 22 belongs to the host's sshd) and
+   `INJECT_PORT` (default 8080) configurable. `BIND_ADDR` defaults to `127.0.0.1` since
+   2026-10-27 (was all interfaces): the HTTP token is clear text and grants root in the container.
 3. No egress firewall.
 4. Debian 13 trixie.
 5. A restart continues the last conversation of the working directory (`claude --continue`)
@@ -219,9 +261,14 @@ claude-container/
    With several conversations in one directory, `--continue` takes the one with the most recent
    activity (not the oldest, and not the one the tmux window happened to run), and it keeps the
    session id, so after the first restart that choice stays stable.
-6. The conversations get their own volume, `claude-sessions`, mounted at `projects/` inside the
-   `claude-config` volume. Docker mounts the parent first, so the two nest without a symlink.
-   Dropping all conversations is then one `docker volume rm` and leaves `.credentials.json`,
-   `.claude.json` and the settings untouched. What stays behind in `claude-config` is
+6. The conversations get their own directory, `.volume_sessions/`, mounted at `projects/` inside
+   `.volume_config/`. Docker mounts the parent first, so the two nest without a symlink.
+   Dropping all conversations is then one `rm -rf` and leaves `.credentials.json`,
+   `.claude.json` and the settings untouched. What stays behind in `.volume_config/` is
    per-session scratch that Claude Code expires on its own: `file-history/`, `session-env/`,
    `jobs/` and the prompt history in `history.jsonl`.
+7. (2026-10-27) State lives in plain bind mounts of the instance directory, not in named volumes
+   backed by bind mounts: compose resolves relative paths only for the former and creates
+   missing directories, while `driver_opts.device` goes to dockerd verbatim and must exist.
+8. (2026-10-27) Several instances per host, one directory each, driven by the `pickled-claude`
+   wrapper (see "Instances"). It replaces `setup.sh`/`build.sh`.

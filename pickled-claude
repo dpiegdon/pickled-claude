@@ -1,0 +1,198 @@
+#!/bin/bash
+# Run one pickled-claude instance from its own directory.
+#
+#   pickled-claude [-C DIR] init [DIR]     set up an instance directory (default: DIR or .)
+#   pickled-claude [-C DIR] ssh [ARGS...]  ssh into the instance (no ARGS: attach to Claude)
+#   pickled-claude ls                      list known instances
+#   pickled-claude [-C DIR] COMPOSE...     anything else is a docker compose command:
+#                                          up -d, logs -f, down, build, ps, exec claude peek, ...
+#
+# An instance is a directory holding .env, authorized_keys, workspace/ and .volume_*/.
+# It is the current directory unless -C says otherwise. The code stays in the repository this
+# script lives in; symlink the script into your PATH to use it from anywhere.
+set -euo pipefail
+
+usage() { sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; }
+die() { echo "pickled-claude: $*" >&2; exit 1; }
+
+REPO=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
+REGISTRY="${PICKLED_CLAUDE_REGISTRY:-${XDG_CONFIG_HOME:-$HOME/.config}/pickled-claude/instances}"
+VOLUME_DIRS=(.volume_commandhistory .volume_config .volume_sessions .volume_ssh_hostkeys workspace)
+
+# Last value of KEY in an env file, surrounding quotes removed.
+env_get() {
+    local value
+    value=$(sed -n "s/^$1=//p" "$2" 2>/dev/null | tail -n 1)
+    value=${value%\"}; value=${value#\"}; value=${value%\'}; value=${value#\'}
+    printf '%s' "$value"
+}
+
+# What compose accepts as a project name: lowercase letters, digits, "-" and "_".
+sanitize_name() {
+    printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]/-/g; s/^[^a-z0-9]*//'
+}
+
+project_name() {
+    local name
+    name=$(env_get COMPOSE_PROJECT_NAME "$1/.env")
+    [ -n "$name" ] || name=$(sanitize_name "$(basename "$1")")
+    printf '%s' "$name"
+}
+
+register() {
+    mkdir -p "$(dirname "$REGISTRY")"
+    touch "$REGISTRY"
+    grep -qxF "$1" "$REGISTRY" || printf '%s\n' "$1" >> "$REGISTRY"
+}
+
+# Instance directories: the registry plus containers started from this repository's compose
+# file (that covers instances run with plain "docker compose"). Only those with a .env count.
+instances() {
+    {
+        [ -r "$REGISTRY" ] && cat "$REGISTRY"
+        docker ps -a --filter "label=com.docker.compose.project.config_files=$REPO/compose.yaml" \
+            --format '{{.Label "com.docker.compose.project.working_dir"}}' 2>/dev/null || true
+    } | awk 'NF && !seen[$0]++' | while IFS= read -r dir; do
+        [ -f "$dir/.env" ] && printf '%s\n' "$dir"
+    done
+}
+
+port_taken() {
+    local port=$1 dir
+    ss -Hltn 2>/dev/null | awk '{print $4}' | grep -q ":$port\$" && return 0
+    while IFS= read -r dir; do
+        [ "$(env_get SSH_PORT "$dir/.env")" = "$port" ] && return 0
+        [ "$(env_get INJECT_PORT "$dir/.env")" = "$port" ] && return 0
+    done < <(instances)
+    return 1
+}
+
+free_port() {
+    local port=$1
+    while port_taken "$port"; do port=$((port + 1)); done
+    printf '%s' "$port"
+}
+
+name_taken() {
+    local name=$1 dir
+    docker compose ls -a --format json 2>/dev/null | grep -q "\"Name\":\"$name\"" && return 0
+    while IFS= read -r dir; do
+        [ "$(project_name "$dir")" = "$name" ] && return 0
+    done < <(instances)
+    return 1
+}
+
+cmd_init() {
+    local dir=$1 name base n token
+    mkdir -p "$dir"
+    dir=$(cd "$dir" && pwd -P)
+
+    if [ -f "$dir/.env" ]; then
+        echo ".env exists, left unchanged"
+    else
+        base=$(sanitize_name "$(basename "$dir")")
+        case "$base" in pickled-claude*) name=$base ;; *) name=pickled-claude-$base ;; esac
+        n=2; base=$name
+        while name_taken "$name"; do name=$base-$n; n=$((n + 1)); done
+
+        local ssh_port inject_port
+        ssh_port=$(free_port 2222)
+        inject_port=$(free_port 8080)
+        token=$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
+
+        sed -e "s|^COMPOSE_PROJECT_NAME=.*|COMPOSE_PROJECT_NAME=$name|" \
+            -e "s|^SSH_PORT=.*|SSH_PORT=$ssh_port|" \
+            -e "s|^INJECT_PORT=.*|INJECT_PORT=$inject_port|" \
+            -e "s|^INJECT_TOKEN=.*|INJECT_TOKEN=$token|" \
+            -e "s|^UID=.*|UID=$(id -u)|" \
+            -e "s|^GID=.*|GID=$(id -g)|" \
+            "$REPO/.env.example" > "$dir/.env"
+        chmod 600 "$dir/.env"
+        echo "created .env: instance $name, SSH port $ssh_port, HTTP port $inject_port," \
+             "random INJECT_TOKEN, UID/GID $(id -u)/$(id -g)"
+    fi
+
+    if [ ! -s "$dir/authorized_keys" ]; then
+        : > "$dir/authorized_keys"
+        local key
+        for key in ~/.ssh/id_ed25519.pub ~/.ssh/id_ecdsa.pub ~/.ssh/id_rsa.pub; do
+            if [ -f "$key" ]; then cat "$key" >> "$dir/authorized_keys"; fi
+        done
+        if [ -s "$dir/authorized_keys" ]; then
+            echo "authorized_keys: $(wc -l < "$dir/authorized_keys") public key(s) copied from ~/.ssh"
+        else
+            echo "WARNING: no public key found in ~/.ssh. Put one into $dir/authorized_keys before starting."
+        fi
+    else
+        echo "authorized_keys exists, left unchanged"
+    fi
+
+    # Created here, owned by you; otherwise dockerd would create them as root.
+    (cd "$dir" && mkdir -p "${VOLUME_DIRS[@]}")
+    register "$dir"
+
+    local hint=""
+    [ "$dir" = "$(pwd -P)" ] || hint="cd $(printf '%q' "$dir") && "
+    cat <<MSG
+
+Next:
+  ${hint}pickled-claude up -d --build    # build the image and start the container
+  pickled-claude logs -f                # watch until "tmux session 'claude' started"
+  pickled-claude ssh                    # attach to the Claude session (Ctrl-b d to detach)
+MSG
+}
+
+cmd_ls() {
+    local dir name state
+    printf '%-28s %-6s %-6s %-10s %s\n' NAME SSH HTTP STATE DIRECTORY
+    while IFS= read -r dir; do
+        name=$(project_name "$dir")
+        state=$(docker ps -a --filter "label=com.docker.compose.project=$name" \
+                    --format '{{.State}}' 2>/dev/null | head -n 1 || true)
+        printf '%-28s %-6s %-6s %-10s %s\n' "$name" \
+            "$(env_get SSH_PORT "$dir/.env")" "$(env_get INJECT_PORT "$dir/.env")" \
+            "${state:--}" "$dir"
+    done < <(instances)
+}
+
+require_instance() {
+    [ -f "$INSTANCE/.env" ] || die "no .env in $INSTANCE; create the instance with: pickled-claude init $INSTANCE"
+    register "$INSTANCE"
+}
+
+cmd_ssh() {
+    require_instance
+    local host port
+    host=$(env_get BIND_ADDR "$INSTANCE/.env")
+    case "$host" in ''|0.0.0.0|'::') host=localhost ;; esac
+    port=$(env_get SSH_PORT "$INSTANCE/.env")
+    # HostKeyAlias: known_hosts tracks each instance by name, not by a port another one may reuse.
+    exec ssh -p "${port:-2222}" -o HostKeyAlias="$(project_name "$INSTANCE")" "claude@$host" "$@"
+}
+
+cmd_compose() {
+    require_instance
+    PICKLED_CLAUDE_SRC=$REPO exec docker compose \
+        -f "$REPO/compose.yaml" --project-directory "$INSTANCE" --env-file "$INSTANCE/.env" \
+        -p "$(project_name "$INSTANCE")" "$@"
+}
+
+INSTANCE=$PWD
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -C) [ $# -ge 2 ] || die "-C needs a directory"
+            [ -d "$2" ] || die "no such directory: $2"
+            INSTANCE=$(cd "$2" && pwd -P); shift 2 ;;
+        -h|--help|help) usage; exit 0 ;;
+        *) break ;;
+    esac
+done
+[ $# -gt 0 ] || { usage >&2; exit 2; }
+[ -d "$INSTANCE" ] && INSTANCE=$(cd "$INSTANCE" && pwd -P)
+
+case "$1" in
+    init) cmd_init "${2:-$INSTANCE}" ;;
+    ls)   cmd_ls ;;
+    ssh)  shift; cmd_ssh "$@" ;;
+    *)    cmd_compose "$@" ;;
+esac

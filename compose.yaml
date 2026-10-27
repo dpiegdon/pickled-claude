@@ -1,18 +1,26 @@
-# pickled-claude: Claude Code in tmux, inside Docker. Copy .env.example to .env (or run ./setup.sh) first.
-name: pickled-claude
+# pickled-claude: Claude Code in tmux, inside Docker.
+#
+# Every relative path below belongs to the instance directory (compose's project directory),
+# so several instances can run side by side, each from its own directory with its own .env.
+# Create one with "./pickled-claude init DIR" and drive it with "pickled-claude ..." from there.
+# The repository directory is an instance too: plain "docker compose up -d" here still works.
+#
+# The project name comes from COMPOSE_PROJECT_NAME in the instance's .env (falls back to the
+# directory name), and it names the container: <project>-claude-1.
 
 services:
   claude:
     build:
-      context: .
+      # The wrapper points this at the repository when the instance lives elsewhere.
+      context: ${PICKLED_CLAUDE_SRC:-.}
       # The build uses the host's network stack (DNS, proxies) instead of a bridge.
       network: host
       args:
         UID: ${UID:-1000}
         GID: ${GID:-1000}
-    image: pickled-claude:local
-    container_name: pickled-claude
-    hostname: pickle
+    # One image per uid/gid, so instances for different users never overwrite each other's image.
+    image: pickled-claude:${UID:-1000}-${GID:-1000}
+    hostname: ${CONTAINER_HOSTNAME:-pickle}
     init: true
     restart: unless-stopped
     ports:
@@ -20,13 +28,13 @@ services:
       - "${BIND_ADDR:-127.0.0.1}:${SSH_PORT:-2222}:22"
       - "${BIND_ADDR:-127.0.0.1}:${INJECT_PORT:-8080}:8080"
     # Hand the container's output to the host's journald, which owns rotation and retention:
-    #   journalctl -t pickled-claude -f      (docker compose logs works too)
+    #   journalctl -t <project>-claude-1 -f      (docker compose logs works too)
     # No journald on the host (Docker Desktop)? Use `driver: local`, it rotates by default;
     # `json-file` does not.
     logging:
       driver: journald
       options:
-        tag: pickled-claude
+        tag: "{{.Name}}"
     environment:
       INJECT_TOKEN: ${INJECT_TOKEN:-}
       INJECT_ENTER_DELAY: ${INJECT_ENTER_DELAY:-0.5}
@@ -43,8 +51,8 @@ services:
     configs:
       - source: authorized_keys
         target: /config/authorized_keys
-    # Plain bind mounts: compose resolves them against this directory and creates missing
-    # directories. Wiping one of them (container stopped) is "rm -rf DIR".
+    # Plain bind mounts: compose resolves them against the instance directory and creates
+    # missing directories. Wiping one of them (container stopped) is "rm -rf DIR".
     volumes:
       - ./.volume_commandhistory:/commandhistory           # bash history
       - ./.volume_config:/home/claude/.claude              # login, settings, .claude.json
