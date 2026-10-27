@@ -26,6 +26,7 @@ setup() {
     cat > "$T/bin/docker" <<'STUB'
 #!/bin/bash
 printf 'PICKLED_CLAUDE_SRC=%s docker %s\n' "${PICKLED_CLAUDE_SRC:-}" "$*" >> "$STUB_LOG"
+printf 'env GID=%s SSH_PORT=%s\n' "${GID-unset}" "${SSH_PORT-unset}" >> "$STUB_LOG"
 if [ "$1 $2" = "compose ls" ]; then
     for p in ${STUB_PROJECTS:-}; do printf '{"Name":"%s","Status":"exited(1)"}' "$p"; done; echo
 fi
@@ -43,11 +44,12 @@ STUB
     : > "$T/log"
 }
 
+RUN_ENV=()  # extra VAR=VALUE for the next run, as if exported in your shell
 run() {     # run in DIR with ARGS; output in $T/out
     local dir=$1; shift
     (cd "$dir" && env -i PATH="$T/bin:/usr/bin:/bin" HOME="$T/home" STUB_LOG="$T/log" \
         PICKLED_CLAUDE_REGISTRY="$T/registry" STUB_LISTEN="${STUB_LISTEN:-}" \
-        STUB_PROJECTS="${STUB_PROJECTS:-}" "$WRAPPER" "$@") > "$T/out" 2>&1
+        STUB_PROJECTS="${STUB_PROJECTS:-}" "${RUN_ENV[@]}" "$WRAPPER" "$@") > "$T/out" 2>&1
 }
 
 envval() { sed -n "s/^$1=//p" "$2"; }
@@ -66,6 +68,7 @@ check "uid/gid of the caller" test "$(envval UID "$A/.env"):$(envval GID "$A/.en
 check "localhost bind by default" test "$(envval BIND_ADDR "$A/.env")" = 127.0.0.1
 check ".env readable only by the owner" test "$(stat -c %a "$A/.env")" = 600
 check "public key copied" grep -q AAAATEST "$A/authorized_keys"
+check "image overlay builds on the base image" grep -qx 'FROM base' "$A/image/Dockerfile"
 
 run "$T/work" init "Proj B"
 B="$T/work/Proj B"
@@ -76,6 +79,9 @@ check "second instance: sanitized name" test "$(envval COMPOSE_PROJECT_NAME "$B/
 cp "$A/.env" "$T/env.before"
 run "$T/work" init projA
 check "re-init leaves .env alone" cmp -s "$A/.env" "$T/env.before"
+echo "RUN true" >> "$A/image/Dockerfile"; cp "$A/image/Dockerfile" "$T/df.before"
+run "$T/work" init projA
+check "re-init leaves image/Dockerfile alone" cmp -s "$A/image/Dockerfile" "$T/df.before"
 
 run "$T/work" ls
 check "ls lists both instances" grep -q 'pickled-claude-proj-b *2223 *8081' "$T/out"
@@ -103,6 +109,11 @@ run "$A" up -d
 check "compose command for the current directory" grep -qxF \
     "PICKLED_CLAUDE_SRC=$REPO docker compose -f $REPO/compose.yaml --project-directory $A --env-file $A/.env -p pickled-claude-proja up -d" "$T/log"
 : > "$T/log"
+RUN_ENV=(GID=4242 SSH_PORT=1)
+run "$A" up -d
+RUN_ENV=()
+check "variables of the .env do not leak in from the shell" grep -qxF "env GID=unset SSH_PORT=unset" "$T/log"
+: > "$T/log"
 run "$T" -C work/projA logs -f
 check "-C selects the instance" grep -qF -- "--project-directory $A --env-file $A/.env -p pickled-claude-proja logs -f" "$T/log"
 : > "$T/log"
@@ -125,7 +136,16 @@ if docker compose version >/dev/null 2>&1; then
     check "instance one: own project" \
         grep -q "^name: pickled-claude-one" "$T/one.yaml"
     check "instance one: bind sources in its directory" grep -q "source: $T/one/.volume_sessions" "$T/one.yaml"
-    check "instance one: builds from the repository" grep -q "context: $REPO\$" "$T/one.yaml"
+    check "instance one: base image from the repository" grep -q "context: $REPO\$" "$T/one.yaml"
+    check "instance one: overlay from its own image/" grep -q "context: $T/one/image\$" "$T/one.yaml"
+    check "instance one: overlay builds FROM its base" grep -q "base: service:base" "$T/one.yaml"
+    (cd "$T/one" && "$WRAPPER" config --images) > "$T/one.images" 2>&1
+    (cd "$T/two" && "$WRAPPER" config --images) > "$T/two.images" 2>&1
+    check "instance one: images named after the instance" \
+        test "$(sort "$T/one.images" | tr '\n' ' ')" = "pickled-claude-one-base pickled-claude-one-claude "
+    check "instances share no image" test -z "$(comm -12 <(sort "$T/one.images") <(sort "$T/two.images"))"
+    (cd "$T/one" && GID=4242 "$WRAPPER" config) > "$T/one-env.yaml" 2>&1
+    check "an exported GID does not override the instance's" grep -q "GID: \"$(id -g)\"" "$T/one-env.yaml"
     check "instance two: own project" grep -q "^name: pickled-claude-two" "$T/two.yaml"
     check "instance two: bind sources in its directory" grep -q "source: $T/two/workspace" "$T/two.yaml"
     check "instances publish different ports" \

@@ -6,10 +6,14 @@
 # The repository directory is an instance too: plain "docker compose up -d" here still works.
 #
 # The project name comes from COMPOSE_PROJECT_NAME in the instance's .env (falls back to the
-# directory name), and it names the container: <project>-claude-1.
+# directory name). It names the container, <project>-claude-1, and both images, which belong
+# to this instance alone:
+#   <project>-base     the repository's Dockerfile, built with this instance's UID/GID
+#   <project>-claude   ./image/Dockerfile on top of it ("FROM base"), what the container runs
 
 services:
-  claude:
+  # Only an image: the claude service builds on it. It never runs a container.
+  base:
     build:
       # The wrapper points this at the repository when the instance lives elsewhere.
       context: ${PICKLED_CLAUDE_SRC:-.}
@@ -18,8 +22,15 @@ services:
       args:
         UID: ${UID:-1000}
         GID: ${GID:-1000}
-    # One image per uid/gid, so instances for different users never overwrite each other's image.
-    image: pickled-claude:${UID:-1000}-${GID:-1000}
+    scale: 0
+
+  claude:
+    build:
+      # The instance's own additions; COPY takes files from ./image.
+      context: ./image
+      network: host
+      additional_contexts:
+        base: service:base
     hostname: ${CONTAINER_HOSTNAME:-pickle}
     init: true
     restart: unless-stopped

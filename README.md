@@ -35,8 +35,8 @@ is an instance too: `pickled-claude init .` there, and plain `docker compose` wo
 
 ### Several instances
 
-Each instance is a directory with its own `.env`, `authorized_keys`, `workspace/` and state,
-so several run side by side without sharing anything but the image:
+Each instance is a directory with its own `.env`, `authorized_keys`, `workspace/`, state and
+images, so several run side by side without sharing anything:
 
 ```bash
 pickled-claude init ~/claude/projA       # SSH 2222, HTTP 8080
@@ -157,9 +157,10 @@ All of it lives in the instance directory, bind-mounted into the container:
 | bash history | `.volume_commandhistory/` | `/commandhistory` | until you delete it |
 | SSH host key | `.volume_ssh_hostkeys/` | `/etc/ssh/hostkeys` | until you delete it |
 | your project | `workspace/` | `/workspace` | until you delete it |
+| this instance's image additions | `image/Dockerfile` (and files next to it) | the image | until you delete it |
 | packages Claude installed with apt/pip/npm | | container layer | `restart`, but not recreate |
 
-Put tools you always want into the `Dockerfile` (the apt line) and rebuild.
+Put tools you always want into the instance's `image/Dockerfile` and rebuild (see below).
 `pickled-claude down -v` does not touch any of these directories; to reset an instance, stop
 it and delete them. Files the container wrote there may belong to root or the container's uid,
 so `sudo rm -rf` may be needed.
@@ -200,11 +201,34 @@ at `/usr/local/bin/claude-statusline`. It does that only while there is no `sett
 an instance that already has one (older instances included) keeps it as it is; add the
 `statusLine` block there by hand, or remove the `statusLine` block to get rid of it.
 
+## The instance's image
+
+Every instance builds its own two images, and nothing else uses them:
+
+| image | built from |
+| --- | --- |
+| `<instance>-base` | the repository's `Dockerfile`, with the instance's `UID`/`GID` |
+| `<instance>-claude` | the instance's `image/Dockerfile` (`FROM base`), which the container runs |
+
+`init` creates `image/Dockerfile` with commented examples. Add what this instance needs:
+
+```dockerfile
+FROM base
+RUN apt-get update && apt-get install -y --no-install-recommends postgresql-client \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+COPY my-tool /usr/local/bin/          # files next to image/Dockerfile
+```
+
+Then `pickled-claude build && pickled-claude up -d`. A rebuild picks up the repository as it is
+at that moment, and only for this instance: the others keep running what they were built with
+until they are rebuilt themselves. (Docker's build cache is shared by all builds on the host;
+it only skips steps that are identical, so it does not tie the instances together.)
+
 ## Updating Claude Code
 
 Claude Code auto-updates itself inside the container (into the container layer). A rebuild
 (`pickled-claude build --pull --no-cache && pickled-claude up -d`) installs the current version
-into the image. Set `DISABLE_AUTOUPDATER=1` if you want the image to be the only source of truth.
+into the instance's image. Set `DISABLE_AUTOUPDATER=1` if you want the image to be the only source of truth.
 
 ## Security notes
 
@@ -258,6 +282,6 @@ container/
 tests/                   shell tests: ./tests/*.test.sh
 
 instance directory (the repository itself, or anywhere else):
-  .env  authorized_keys  workspace/  .volume_config/  .volume_sessions/
-  .volume_commandhistory/  .volume_ssh_hostkeys/
+  .env  authorized_keys  image/Dockerfile  workspace/
+  .volume_config/  .volume_sessions/  .volume_commandhistory/  .volume_ssh_hostkeys/
 ```

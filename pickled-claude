@@ -7,7 +7,9 @@
 #   pickled-claude [-C DIR] COMPOSE...     anything else is a docker compose command:
 #                                          up -d, logs -f, down, build, ps, exec claude peek, ...
 #
-# An instance is a directory holding .env, authorized_keys, workspace/ and .volume_*/.
+# An instance is a directory holding .env, authorized_keys, image/Dockerfile, workspace/ and
+# .volume_*/. It has its own images too: <name>-base from this repository, <name>-claude from
+# its image/Dockerfile on top. Nothing is shared with other instances.
 # It is the current directory unless -C says otherwise. The code stays in the repository this
 # script lives in; symlink the script into your PATH to use it from anywhere.
 set -euo pipefail
@@ -128,7 +130,23 @@ cmd_init() {
     fi
 
     # Created here, owned by you; otherwise dockerd would create them as root.
-    (cd "$dir" && mkdir -p "${VOLUME_DIRS[@]}")
+    (cd "$dir" && mkdir -p "${VOLUME_DIRS[@]}" image)
+    if [ ! -f "$dir/image/Dockerfile" ]; then
+        cat > "$dir/image/Dockerfile" <<'DOCKERFILE'
+# This instance's image: the pickled-claude base image (the repository's Dockerfile, built
+# for this instance only) plus whatever this instance needs. COPY takes files from this
+# directory. Rebuild with "pickled-claude build", then "pickled-claude up -d".
+FROM base
+
+# RUN apt-get update && apt-get install -y --no-install-recommends postgresql-client \
+#     && apt-get clean && rm -rf /var/lib/apt/lists/*
+# COPY some-tool /usr/local/bin/
+# RUN runuser -u claude -- pip install --user --break-system-packages some-package
+DOCKERFILE
+        echo "image/Dockerfile: created, add this instance's packages there"
+    else
+        echo "image/Dockerfile exists, left unchanged"
+    fi
     register "$dir"
 
     local hint=""
@@ -148,7 +166,7 @@ cmd_ls() {
     while IFS= read -r dir; do
         name=$(project_name "$dir")
         state=$(docker ps -a --filter "label=com.docker.compose.project=$name" \
-                    --format '{{.State}}' 2>/dev/null | head -n 1 || true)
+                    --filter "label=com.docker.compose.service=claude" --format '{{.State}}' 2>/dev/null | head -n 1 || true)
         printf '%-28s %-6s %-6s %-10s %s\n' "$name" \
             "$(env_get SSH_PORT "$dir/.env")" "$(env_get INJECT_PORT "$dir/.env")" \
             "${state:--}" "$dir"
@@ -172,7 +190,12 @@ cmd_ssh() {
 
 cmd_compose() {
     require_instance
-    PICKLED_CLAUDE_SRC=$REPO exec docker compose \
+    # In compose's interpolation the shell environment beats the env file. Drop whatever the
+    # instance's .env sets, so nothing exported in your shell leaks into an instance.
+    local drop=() key
+    while IFS= read -r key; do drop+=(-u "$key"); done \
+        < <(sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' "$INSTANCE/.env")
+    exec env "${drop[@]}" PICKLED_CLAUDE_SRC="$REPO" docker compose \
         -f "$REPO/compose.yaml" --project-directory "$INSTANCE" --env-file "$INSTANCE/.env" \
         -p "$(project_name "$INSTANCE")" "$@"
 }

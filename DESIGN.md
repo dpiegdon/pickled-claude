@@ -189,8 +189,18 @@ in the repository keeps working with the repository as its instance.
 What keeps instances apart: no fixed `name`/`container_name` in `compose.yaml`; the project name
 comes from the instance's `.env`; host ports are per instance and `init` picks free ones
 (nothing listening, not claimed by another instance's `.env`); the journald tag is the
-container name. Instances share the image `pickled-claude:<UID>-<GID>`, one per user, so
-instances for different users do not overwrite each other's image.
+container name; the shell environment is stripped of every variable the instance's `.env`
+sets before compose runs (compose would let it win over the file). Images are per instance
+too: `compose.yaml` has no `image:` names, so compose calls them `<project>-<service>`:
+
+- `base` builds the repository's `Dockerfile` with the instance's `UID`/`GID`. `scale: 0`:
+  it is only an image and never runs.
+- `claude` builds `<instance>/image/Dockerfile` (context `<instance>/image/`) with
+  `additional_contexts: {base: "service:base"}`, so its `FROM base` is this instance's base
+  and compose builds that first. `init` creates the file with `FROM base` and examples.
+
+A rebuild takes the repository as it is at that moment, for that instance only. Docker's
+layer cache is shared host-wide but only short-cuts identical steps.
 
 Known instances are listed in `~/.config/pickled-claude/instances` (written by `init` and by
 every wrapper command), plus whatever containers carry this repository's compose file in their
@@ -211,7 +221,7 @@ compose labels. `pickled-claude ls` and the port and name checks of `init` read 
   container and prompts would block remote injection. Set `CLAUDE_SKIP_PERMISSIONS=0` to get
   normal prompts (answer them via `ssh` attach or `inject -k`).
 - Anything installed with apt/pip lives in the container layer: survives `restart`, is lost
-  on `docker compose up` after an image rebuild. Put permanent tools in the Dockerfile.
+  when the container is recreated. Put permanent tools in the instance's `image/Dockerfile`.
 
 ## Optional add-ons (not in the first version)
 
@@ -246,7 +256,7 @@ pickled-claude/
     claude-statusline.test.sh      what the status line shows, and that it never shows cost
 
 <instance>/               (any directory; the repository itself works too, all gitignored)
-  .env  authorized_keys  workspace/
+  .env  authorized_keys  image/Dockerfile  workspace/
   .volume_config/  .volume_sessions/  .volume_commandhistory/  .volume_ssh_hostkeys/
 ```
 
@@ -276,3 +286,6 @@ pickled-claude/
    missing directories, while `driver_opts.device` goes to dockerd verbatim and must exist.
 8. (2026-10-27) Several instances per host, one directory each, driven by the `pickled-claude`
    wrapper (see "Instances"). It replaces `setup.sh`/`build.sh`.
+9. (2026-10-27) Nothing is shared between instances implicitly, images included: each builds
+   its own base from the repository and its own overlay from `image/Dockerfile` on top.
+   Repository changes reach an instance when that instance is rebuilt, not before.

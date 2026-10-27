@@ -32,6 +32,64 @@ Open work, roughly in the order it should be done. Items 1-8 come from the revie
     Several containers side by side, each started from its own
     directory, with that directory's `.env`, `authorized_keys`, `workspace/` and `.volume_*`.
     See the plan below.
+11. [x] **Per-instance images.** (needs the Docker-host check at the end of its plan) Nothing shared implicitly between instances: each instance
+    builds its own base image from the repository and its own overlay on top, from a
+    `Dockerfile` in the instance directory. Rebuilding one instance never changes another.
+    See "Plan: per-instance images" below.
+
+---
+
+## Plan: per-instance images
+
+Today all instances of one user run the same image `pickled-claude:<UID>-<GID>`; a rebuild from
+any instance changes what the others get on their next recreate.
+
+### Model
+
+```
+<instance>/image/Dockerfile      created by init, owned by the instance
+    FROM base                    "base" = this instance's build of the repository Dockerfile
+    RUN apt-get install ...      whatever this instance needs; COPY takes files from image/
+```
+
+Two images per instance, both named after the instance (compose's default `<project>-<service>`,
+so no `image:` line is needed):
+
+| image | built from | role |
+|---|---|---|
+| `<instance>-base` | repository `Dockerfile` (+ `UID`/`GID` of the instance) | Claude Code, sshd, tmux, scripts |
+| `<instance>-claude` | `<instance>/image/Dockerfile`, `FROM base` | what the container runs |
+
+The repository code still reaches every instance, but only when *that* instance rebuilds
+(`pickled-claude build`), so each instance runs the repository state of its last build.
+Docker's layer cache is shared by all builds on the host; it only skips identical steps and
+does not make one instance's image depend on another's.
+
+### compose.yaml
+
+- Service `base`: `build` from `${PICKLED_CLAUDE_SRC:-.}` with the `UID`/`GID` args and
+  `network: host`. It is never meant to run: `scale: 0` (fallback if compose still starts it:
+  `entrypoint: ["true"]`, `restart: "no"`).
+- Service `claude`: `build.context: ./image`, `additional_contexts: {base: "service:base"}`,
+  so compose builds `base` first and the overlay's `FROM base` resolves to it.
+  Drops `image: pickled-claude:${UID}-${GID}`.
+- `.gitignore`: `/image/` (the repository directory can still be an instance).
+
+### Wrapper and docs
+
+- `init` writes `image/Dockerfile` (`FROM base` plus commented examples) if it is missing.
+- `ls` reads the state of the `claude` service only (the `base` service has no container).
+- README/DESIGN: section "Customizing an instance's image"; rebuild = `pickled-claude build`.
+- No migration: existing instances are re-created with `pickled-claude init`.
+
+### Tests and verification
+
+- `tests/pickled-claude.test.sh`: `init` creates `image/Dockerfile` and keeps an existing one;
+  `docker compose config` of two instances shows distinct overlay contexts and per-instance
+  image names.
+- Needs a Docker host (not available where this was written): `pickled-claude build` builds
+  base then overlay; `up -d` starts only `<instance>-claude-1`; an apt package added to one
+  instance's overlay is missing in the other; rebuilding instance A leaves B's images untouched.
 
 ---
 
