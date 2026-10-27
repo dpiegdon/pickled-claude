@@ -35,7 +35,7 @@ directory (relative to where you are, or absolute). From the repository:
 | `build [ARGS]` | build the instance's base image (ARGS such as `--pull --no-cache`), then its image on top |
 | `info` | instance name, state, port mapping with the matching `ssh` command and URL, images |
 | `ssh [ARGS]` | ssh into the instance; without ARGS that attaches to Claude |
-| `delete [--yes]` | remove the container, both images and the whole directory, after you type the instance name |
+| `delete [--yes]`, `rm` | remove the container, both images and the whole directory, after you type the instance name |
 | anything else | a `docker compose` command for this instance: `logs -f`, `down`, `ps`, `exec claude bash`, ... |
 
 `pickled-claude ls` lists all instances. To call it from anywhere, link it into your PATH:

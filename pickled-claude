@@ -7,7 +7,7 @@
 #                                          then the image on top
 #   pickled-claude INSTANCE info           name, state, port mapping, images
 #   pickled-claude INSTANCE ssh [ARGS...]  ssh into it (no ARGS: attach to Claude)
-#   pickled-claude INSTANCE delete [--yes] remove its container, images and directory
+#   pickled-claude INSTANCE delete [--yes] remove its container, images and directory (alias: rm)
 #   pickled-claude INSTANCE COMPOSE...     any other docker compose command: logs -f, down, ps, ...
 #   pickled-claude ls                      list known instances
 #
@@ -264,7 +264,9 @@ cmd_delete() {
         read -r -p "Type $name to confirm: " answer || true
         [ "$answer" = "$name" ] || die "not confirmed, nothing deleted"
     fi
-    compose down --remove-orphans
+    # Not fatal: an instance that never started, or whose compose setup is broken, must still
+    # be deletable.
+    compose down --remove-orphans || echo "pickled-claude: 'down' failed, deleting anyway" >&2
     # Files the container created as root can be beyond your reach; the instance's own base
     # image (still there at this point) clears them.
     if ! rm -rf "$INSTANCE" 2>/dev/null; then
@@ -296,6 +298,6 @@ case "$1" in
     build)  shift; cmd_build "$@" ;;
     info)   cmd_info ;;
     ssh)    shift; cmd_ssh "$@" ;;
-    delete) shift; cmd_delete "$@" ;;
+    delete|rm) shift; cmd_delete "$@" ;;
     *)      require_instance; compose "$@" ;;
 esac

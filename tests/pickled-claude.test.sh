@@ -27,6 +27,7 @@ setup() {
 #!/bin/bash
 printf 'PICKLED_CLAUDE_SRC=%s docker %s\n' "${PICKLED_CLAUDE_SRC:-}" "$*" >> "$STUB_LOG"
 printf 'env GID=%s SSH_PORT=%s\n' "${GID-unset}" "${SSH_PORT-unset}" >> "$STUB_LOG"
+case " $* " in *" down "*) exit "${STUB_DOWN_RC:-0}" ;; esac
 if [ "$1 $2" = "compose ls" ]; then
     for p in ${STUB_PROJECTS:-}; do printf '{"Name":"%s","Status":"exited(1)"}' "$p"; done; echo
 fi
@@ -49,7 +50,8 @@ run() {     # run in DIR with ARGS; output in $T/out
     local dir=$1; shift
     (cd "$dir" && env -i PATH="$T/bin:/usr/bin:/bin" HOME="$T/home" STUB_LOG="$T/log" \
         PICKLED_CLAUDE_REGISTRY="$T/registry" STUB_LISTEN="${STUB_LISTEN:-}" \
-        STUB_PROJECTS="${STUB_PROJECTS:-}" "${RUN_ENV[@]}" "$WRAPPER" "$@") > "$T/out" 2>&1
+        STUB_PROJECTS="${STUB_PROJECTS:-}" STUB_DOWN_RC="${STUB_DOWN_RC:-0}" \
+        "${RUN_ENV[@]}" "$WRAPPER" "$@") > "$T/out" 2>&1
 }
 
 envval() { sed -n "s/^$1=//p" "$2"; }
@@ -158,6 +160,10 @@ check "delete unregisters the instance" test -z "$(grep -xF "$A" "$T/registry")"
 run "$T/work" projB init
 run "$T/work" projB delete --yes
 check "delete --yes needs no confirmation" test ! -e "$T/work/projB"
+run "$T/work" projC init
+STUB_DOWN_RC=1 run "$T/work" projC rm --yes; rc=$?
+check "rm is delete, and a failing down does not stop it" test "$rc" = 0 -a ! -e "$T/work/projC"
+check "rm unregisters the instance" test -z "$(grep -x ".*/projC" "$T/registry")"
 run "$T/work" plain delete --yes; rc=$?
 check "delete refuses a directory that is not an instance" test "$rc" = 1 -a -d "$T/work/plain"
 rm -rf "$T"
