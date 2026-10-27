@@ -3,6 +3,8 @@
 #
 #   pickled-claude INSTANCE init           create the instance directory and its settings
 #   pickled-claude INSTANCE up [ARGS...]   build its images and (re)start it, then show info
+#   pickled-claude INSTANCE build [ARGS]   build its base image (ARGS: --pull, --no-cache, ...),
+#                                          then the image on top
 #   pickled-claude INSTANCE info           name, state, port mapping, images
 #   pickled-claude INSTANCE ssh [ARGS...]  ssh into it (no ARGS: attach to Claude)
 #   pickled-claude INSTANCE delete [--yes] remove its container, images and directory
@@ -140,7 +142,8 @@ cmd_init() {
 # This instance's image: the pickled-claude base image (the repository's Dockerfile, built
 # for this instance only) plus whatever this instance needs. COPY takes files from this
 # directory. Rebuild and restart with "pickled-claude INSTANCE up".
-FROM base
+ARG BASE=pickled-claude-base
+FROM ${BASE}
 
 # RUN apt-get update && apt-get install -y --no-install-recommends postgresql-client \
 #     && apt-get clean && rm -rf /var/lib/apt/lists/*
@@ -227,14 +230,24 @@ compose() {
     local drop=() key
     while IFS= read -r key; do drop+=(-u "$key"); done \
         < <(sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' "$INSTANCE/.env")
-    env "${drop[@]}" PICKLED_CLAUDE_SRC="$REPO" docker compose \
+    env "${drop[@]}" PICKLED_CLAUDE_SRC="$REPO" COMPOSE_PROJECT_NAME="$(project_name "$INSTANCE")" \
+        docker compose \
         -f "$REPO/compose.yaml" --project-directory "$INSTANCE" --env-file "$INSTANCE/.env" \
         -p "$(project_name "$INSTANCE")" "$@"
 }
 
-cmd_up() {
+# The overlay builds FROM the base image, so the base has to be there first; compose would
+# build both at once. ARGS only go to the base: the overlay rebuilds anyway when its base
+# changed, and it cannot be pulled from anywhere.
+cmd_build() {
     require_instance
-    compose up -d --build "$@"
+    compose build "$@" base
+    compose build claude
+}
+
+cmd_up() {
+    cmd_build
+    compose up -d "$@"
     echo
     cmd_info
 }
@@ -280,6 +293,7 @@ INSTANCE=$INSTANCE_ARG
 case "$1" in
     init)   cmd_init "$INSTANCE" ;;
     up)     shift; cmd_up "$@" ;;
+    build)  shift; cmd_build "$@" ;;
     info)   cmd_info ;;
     ssh)    shift; cmd_ssh "$@" ;;
     delete) shift; cmd_delete "$@" ;;

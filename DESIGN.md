@@ -195,9 +195,15 @@ too: `compose.yaml` has no `image:` names, so compose calls them `<project>-<ser
 
 - `base` builds the repository's `Dockerfile` with the instance's `UID`/`GID`. `scale: 0`:
   it is only an image and never runs.
-- `claude` builds `<instance>/image/Dockerfile` (context `<instance>/image/`) with
-  `additional_contexts: {base: "service:base"}`, so its `FROM base` is this instance's base
-  and compose builds that first. `init` creates the file with `FROM base` and examples.
+- `claude` builds `<instance>/image/Dockerfile` (context `<instance>/image/`), which starts
+  `ARG BASE` / `FROM ${BASE}`; compose passes `BASE=<project>-base`. `init` creates the file
+  with that header and commented examples.
+- Compose would build both services at once, so the base might not exist yet when the
+  overlay's `FROM` is resolved. `pickled-claude INSTANCE build` (and `up`, which calls it)
+  runs `compose build base`, then `compose build claude`. Build options such as `--pull
+  --no-cache` go to the base only: the overlay's base cannot be pulled from a registry, and
+  the overlay rebuilds anyway once its base changed. (`additional_contexts: service:base`
+  would express the order in compose itself, but not every compose version supports it.)
 
 A rebuild takes the repository as it is at that moment, for that instance only. Docker's
 layer cache is shared host-wide but only short-cuts identical steps.

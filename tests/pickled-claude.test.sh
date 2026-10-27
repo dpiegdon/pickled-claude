@@ -68,7 +68,7 @@ check "uid/gid of the caller" test "$(envval UID "$A/.env"):$(envval GID "$A/.en
 check "localhost bind by default" test "$(envval BIND_ADDR "$A/.env")" = 127.0.0.1
 check ".env readable only by the owner" test "$(stat -c %a "$A/.env")" = 600
 check "public key copied" grep -q AAAATEST "$A/authorized_keys"
-check "image overlay builds on the base image" grep -qx 'FROM base' "$A/image/Dockerfile"
+check "image overlay builds on the base image" grep -qx 'FROM ${BASE}' "$A/image/Dockerfile"
 check "instance is invisible to a surrounding git repository" grep -qx '\*' "$A/.gitignore"
 
 run "$T/work" "Proj B" init
@@ -108,9 +108,17 @@ A=$T/work/projA
 check "init says how to go on" grep -q "pickled-claude projA up" "$T/out"
 : > "$T/log"
 run "$T/work" projA up
-check "up builds and starts the instance" grep -qxF \
-    "PICKLED_CLAUDE_SRC=$REPO docker compose -f $REPO/compose.yaml --project-directory $A --env-file $A/.env -p pickled-claude-proja up -d --build" "$T/log"
+C="PICKLED_CLAUDE_SRC=$REPO docker compose -f $REPO/compose.yaml --project-directory $A --env-file $A/.env -p pickled-claude-proja"
+check "up builds the base, then the overlay, then starts" test \
+    "$(grep -F "$C" "$T/log")" = "$C build base
+$C build claude
+$C up -d"
 check "up shows the info afterwards" grep -q 'SSH   127.0.0.1:2222 -> 22' "$T/out"
+: > "$T/log"
+run "$T/work" projA build --pull --no-cache
+check "build options go to the base image only" test \
+    "$(grep -F "$C" "$T/log")" = "$C build --pull --no-cache base
+$C build claude"
 : > "$T/log"
 RUN_ENV=(GID=4242 SSH_PORT=1)
 run "$T/work" projA up
@@ -166,7 +174,7 @@ if docker compose version >/dev/null 2>&1; then
     check "instance one: bind sources in its directory" grep -q "source: $T/one/.volume_sessions" "$T/one.yaml"
     check "instance one: base image from the repository" grep -q "context: $REPO\$" "$T/one.yaml"
     check "instance one: overlay from its own image/" grep -q "context: $T/one/image\$" "$T/one.yaml"
-    check "instance one: overlay builds FROM its base" grep -q "base: service:base" "$T/one.yaml"
+    check "instance one: overlay builds FROM its own base" grep -q "BASE: pickled-claude-one-base" "$T/one.yaml"
     (cd "$T" && "$WRAPPER" one config --images) > "$T/one.images" 2>&1
     (cd "$T" && "$WRAPPER" two config --images) > "$T/two.images" 2>&1
     check "instance one: images named after the instance" \

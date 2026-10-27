@@ -31,7 +31,8 @@ directory (relative to where you are, or absolute). From the repository:
 | command | effect |
 | --- | --- |
 | `init` | create the instance directory and its settings; leaves existing files alone |
-| `up [ARGS]` | build the instance's images and (re)start it (`docker compose up -d --build`), then `info` |
+| `up [ARGS]` | `build`, then (re)start it (`docker compose up -d ARGS`), then `info` |
+| `build [ARGS]` | build the instance's base image (ARGS such as `--pull --no-cache`), then its image on top |
 | `info` | instance name, state, port mapping with the matching `ssh` command and URL, images |
 | `ssh [ARGS]` | ssh into the instance; without ARGS that attaches to Claude |
 | `delete [--yes]` | remove the container, both images and the whole directory, after you type the instance name |
@@ -218,18 +219,19 @@ Every instance builds its own two images, and nothing else uses them:
 | image | built from |
 | --- | --- |
 | `<instance>-base` | the repository's `Dockerfile`, with the instance's `UID`/`GID` |
-| `<instance>-claude` | the instance's `image/Dockerfile` (`FROM base`), which the container runs |
+| `<instance>-claude` | the instance's `image/Dockerfile` on top of the base, which the container runs |
 
 `init` creates `image/Dockerfile` with commented examples. Add what this instance needs:
 
 ```dockerfile
-FROM base
+ARG BASE=pickled-claude-base          # keep these two lines: the base image is passed in
+FROM ${BASE}
 RUN apt-get update && apt-get install -y --no-install-recommends postgresql-client \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 COPY my-tool /usr/local/bin/          # files next to image/Dockerfile
 ```
 
-Then `pickled-claude INSTANCE up`, which rebuilds before it starts. A rebuild picks up the repository as it is
+Then `pickled-claude INSTANCE up`, which rebuilds before it starts (base first, then this). A rebuild picks up the repository as it is
 at that moment, and only for this instance: the others keep running what they were built with
 until they are rebuilt themselves. (Docker's build cache is shared by all builds on the host;
 it only skips steps that are identical, so it does not tie the instances together.)
@@ -237,7 +239,8 @@ it only skips steps that are identical, so it does not tie the instances togethe
 ## Updating Claude Code
 
 Claude Code auto-updates itself inside the container (into the container layer). A rebuild
-(`pickled-claude INSTANCE build --pull --no-cache && pickled-claude INSTANCE up`) installs the current version
+(`pickled-claude INSTANCE build --pull --no-cache && pickled-claude INSTANCE up`; the options
+apply to the base image) installs the current version
 into the instance's image. Set `DISABLE_AUTOUPDATER=1` if you want the image to be the only source of truth.
 
 ## Security notes

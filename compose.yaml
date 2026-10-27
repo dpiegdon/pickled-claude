@@ -9,11 +9,14 @@
 # directory name). It names the container, <project>-claude-1, and both images, which belong
 # to this instance alone:
 #   <project>-base     the repository's Dockerfile, built with this instance's UID/GID
-#   <project>-claude   ./image/Dockerfile on top of it ("FROM base"), what the container runs
+#   <project>-claude   ./image/Dockerfile on top of it (FROM ${BASE}), what the container runs
+# The base has to exist before the overlay builds: "pickled-claude DIR up" (or "build") builds
+# them one after the other. A plain "docker compose build" may build both at once and fail.
 
 services:
   # Only an image: the claude service builds on it. It never runs a container.
   base:
+    image: ${COMPOSE_PROJECT_NAME:-pickled-claude}-base
     build:
       # The wrapper points this at the repository when the instance lives elsewhere.
       context: ${PICKLED_CLAUDE_SRC:-.}
@@ -29,8 +32,9 @@ services:
       # The instance's own additions; COPY takes files from ./image.
       context: ./image
       network: host
-      additional_contexts:
-        base: service:base
+      args:
+        BASE: ${COMPOSE_PROJECT_NAME:-pickled-claude}-base
+    image: ${COMPOSE_PROJECT_NAME:-pickled-claude}-claude
     hostname: ${CONTAINER_HOSTNAME:-pickle}
     init: true
     restart: unless-stopped

@@ -72,6 +72,9 @@ does not make one instance's image depend on another's.
   `entrypoint: ["true"]`, `restart: "no"`).
 - Service `claude`: `build.context: ./image`, `additional_contexts: {base: "service:base"}`,
   so compose builds `base` first and the overlay's `FROM base` resolves to it.
+  **Changed after the first test:** the user's compose took `service:base` for a path. Now the
+  overlay starts `ARG BASE` / `FROM ${BASE}` with `BASE=<project>-base`, and the wrapper
+  builds `base` before `claude`.
   Drops `image: pickled-claude:${UID}-${GID}`.
 - `.gitignore`: `/image/` (the repository directory can still be an instance).
 
