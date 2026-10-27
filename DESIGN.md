@@ -155,8 +155,8 @@ Example: `curl -X PUT -H "Authorization: Bearer $TOKEN" --data-binary @prompt.tx
 
 | variable | default | meaning |
 | --- | --- | --- |
-| `COMPOSE_PROJECT_NAME` | directory name | instance name; `pickled-claude init` sets a unique one |
-| `INJECT_TOKEN` | (required for HTTP) | bearer token; `pickled-claude init` generates one |
+| `COMPOSE_PROJECT_NAME` | directory name | instance name; `pickled-claude INSTANCE init` sets a unique one |
+| `INJECT_TOKEN` | (required for HTTP) | bearer token; `pickled-claude INSTANCE init` generates one |
 | `CLAUDE_SKIP_PERMISSIONS` | 1 | start with `--dangerously-skip-permissions`; `0` = normal permission prompts |
 | `CLAUDE_ARGS` | empty | extra args, e.g. `--continue`, `--model ...` |
 | `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` | empty | non-interactive auth; otherwise attach once and `/login` |
@@ -166,15 +166,15 @@ Example: `curl -X PUT -H "Authorization: Bearer $TOKEN" --data-binary @prompt.tx
 | `TZ` | UTC | |
 | `DISABLE_AUTOUPDATER` | empty | set `1` to pin the image's version |
 
-`pickled-claude init DIR` creates `.env` with a unique instance name, free ports, a random token
+`pickled-claude DIR init` creates `.env` with a unique instance name, free ports, a random token
 and your uid/gid, copies your public keys into `authorized_keys`, creates `workspace/` and the
-`.volume_*/` directories. Then `pickled-claude up -d --build` from DIR.
+`.volume_*/` directories and `image/Dockerfile`. Then `pickled-claude DIR up`.
 
 ### Instances
 
 An instance is a directory; the repository holds only the code. The wrapper `pickled-claude`
 (repo root, symlinked into the PATH) finds the repository through its own path and the
-instance through `$PWD` or `-C DIR`, and runs
+instance from its first argument, `pickled-claude INSTANCE COMMAND`, and runs
 
 ```
 PICKLED_CLAUDE_SRC=$REPO docker compose -f $REPO/compose.yaml \
@@ -205,7 +205,12 @@ layer cache is shared host-wide but only short-cuts identical steps.
 Known instances are listed in `~/.config/pickled-claude/instances` (written by `init` and by
 every wrapper command), plus whatever containers carry this repository's compose file in their
 compose labels. `pickled-claude ls` and the port and name checks of `init` read both.
-`pickled-claude ssh` uses the instance's port and `HostKeyAlias=<instance name>`, so
+Commands: `init`, `up` (`up -d --build`, then `info`), `info` (state and port mapping from
+`.env` and `docker ps`), `ssh`, `delete` (confirmation by typing the instance name or `--yes`;
+`down`, then the directory, falling back to a container of the instance's base image for files
+the container created as root, then both images and the registry entry; never the repository
+itself), anything else passed to compose. `ssh` uses the instance's port and
+`HostKeyAlias=<instance name>`, so
 `known_hosts` keeps one entry per instance rather than per port.
 
 ## Security notes
@@ -238,7 +243,7 @@ pickled-claude/
   Dockerfile
   compose.yaml
   .env.example            -> <instance>/.env
-  pickled-claude          wrapper: init, ssh, ls, everything else docker compose
+  pickled-claude          INSTANCE init|up|info|ssh|delete, else docker compose; ls
   README.md
   DESIGN.md
   AGENDA.md

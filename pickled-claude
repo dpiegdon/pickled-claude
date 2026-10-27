@@ -1,17 +1,18 @@
 #!/bin/bash
-# Run one pickled-claude instance from its own directory.
+# Manage pickled-claude instances.
 #
-#   pickled-claude [-C DIR] init [DIR]     set up an instance directory (default: DIR or .)
-#   pickled-claude [-C DIR] ssh [ARGS...]  ssh into the instance (no ARGS: attach to Claude)
+#   pickled-claude INSTANCE init           create the instance directory and its settings
+#   pickled-claude INSTANCE up [ARGS...]   build its images and (re)start it, then show info
+#   pickled-claude INSTANCE info           name, state, port mapping, images
+#   pickled-claude INSTANCE ssh [ARGS...]  ssh into it (no ARGS: attach to Claude)
+#   pickled-claude INSTANCE delete [--yes] remove its container, images and directory
+#   pickled-claude INSTANCE COMPOSE...     any other docker compose command: logs -f, down, ps, ...
 #   pickled-claude ls                      list known instances
-#   pickled-claude [-C DIR] COMPOSE...     anything else is a docker compose command:
-#                                          up -d, logs -f, down, build, ps, exec claude peek, ...
 #
-# An instance is a directory holding .env, authorized_keys, image/Dockerfile, workspace/ and
-# .volume_*/. It has its own images too: <name>-base from this repository, <name>-claude from
-# its image/Dockerfile on top. Nothing is shared with other instances.
-# It is the current directory unless -C says otherwise. The code stays in the repository this
-# script lives in; symlink the script into your PATH to use it from anywhere.
+# INSTANCE is a directory, relative to where you are or absolute, holding .env, authorized_keys,
+# image/Dockerfile, workspace/ and .volume_*/. It has its own images too: <name>-base from this
+# repository, <name>-claude from its image/Dockerfile on top. Nothing is shared with other
+# instances. The code stays in the repository this script lives in.
 set -euo pipefail
 
 usage() { sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; }
@@ -131,11 +132,14 @@ cmd_init() {
 
     # Created here, owned by you; otherwise dockerd would create them as root.
     (cd "$dir" && mkdir -p "${VOLUME_DIRS[@]}" image)
+    # An instance is state, not source: keep it out of whatever git repository it sits in
+    # (repositories inside workspace/ are not affected).
+    [ -e "$dir/.gitignore" ] || printf '# pickled-claude instance: not for the surrounding git repository\n*\n' > "$dir/.gitignore"
     if [ ! -f "$dir/image/Dockerfile" ]; then
         cat > "$dir/image/Dockerfile" <<'DOCKERFILE'
 # This instance's image: the pickled-claude base image (the repository's Dockerfile, built
 # for this instance only) plus whatever this instance needs. COPY takes files from this
-# directory. Rebuild with "pickled-claude build", then "pickled-claude up -d".
+# directory. Rebuild and restart with "pickled-claude INSTANCE up".
 FROM base
 
 # RUN apt-get update && apt-get install -y --no-install-recommends postgresql-client \
@@ -149,14 +153,14 @@ DOCKERFILE
     fi
     register "$dir"
 
-    local hint=""
-    [ "$dir" = "$(pwd -P)" ] || hint="cd $(printf '%q' "$dir") && "
+    local me inst
+    me=$(printf '%q' "$0"); inst=$(printf '%q' "$INSTANCE_ARG")
     cat <<MSG
 
 Next:
-  ${hint}pickled-claude up -d --build    # build the image and start the container
-  pickled-claude logs -f                # watch until "tmux session 'claude' started"
-  pickled-claude ssh                    # attach to the Claude session (Ctrl-b d to detach)
+  start:   $me $inst up
+  watch:   $me $inst logs -f      (until "tmux session 'claude' started")
+  attach:  $me $inst ssh          (Ctrl-b d detaches)
 MSG
 }
 
@@ -174,8 +178,13 @@ cmd_ls() {
 }
 
 require_instance() {
-    [ -f "$INSTANCE/.env" ] || die "no .env in $INSTANCE; create the instance with: pickled-claude init $INSTANCE"
+    [ -f "$INSTANCE/.env" ] || die "$INSTANCE_ARG is not an instance (no .env); create it with: $0 $INSTANCE_ARG init"
     register "$INSTANCE"
+}
+
+claude_container() {    # docker ps filter args for the instance's claude container
+    printf '%s\n' --filter "label=com.docker.compose.project=$1" \
+        --filter "label=com.docker.compose.service=claude"
 }
 
 cmd_ssh() {
@@ -188,34 +197,91 @@ cmd_ssh() {
     exec ssh -p "${port:-2222}" -o HostKeyAlias="$(project_name "$INSTANCE")" "claude@$host" "$@"
 }
 
-cmd_compose() {
+cmd_info() {
     require_instance
-    # In compose's interpolation the shell environment beats the env file. Drop whatever the
-    # instance's .env sets, so nothing exported in your shell leaks into an instance.
+    local name env=$INSTANCE/.env bind ssh_port http_port host state ports filter
+    name=$(project_name "$INSTANCE")
+    bind=$(env_get BIND_ADDR "$env"); bind=${bind:-127.0.0.1}
+    ssh_port=$(env_get SSH_PORT "$env"); ssh_port=${ssh_port:-2222}
+    http_port=$(env_get INJECT_PORT "$env"); http_port=${http_port:-8080}
+    case "$bind" in 0.0.0.0|'::') host=localhost ;; *) host=$bind ;; esac
+    mapfile -t filter < <(claude_container "$name")
+    state=$(docker ps -a "${filter[@]}" --format '{{.Status}}' 2>/dev/null | head -n 1 || true)
+    ports=$(docker ps "${filter[@]}" --format '{{.Ports}}' 2>/dev/null | head -n 1 || true)
+
+    printf '%-10s %s\n' instance "$name" directory "$INSTANCE" state "${state:-not created}"
+    printf '%-10s %s\n' ports "SSH   $bind:$ssh_port -> 22     ssh -p $ssh_port claude@$host"
+    if [ -n "$(env_get INJECT_TOKEN "$env")" ]; then
+        printf '%-10s %s\n' "" "HTTP  $bind:$http_port -> 8080   http://$host:$http_port/  (token: INJECT_TOKEN in .env)"
+    else
+        printf '%-10s %s\n' "" "HTTP  $bind:$http_port -> 8080   disabled, INJECT_TOKEN is empty"
+    fi
+    [ -z "$ports" ] || printf '%-10s %s\n' published "$ports"
+    printf '%-10s %s\n' images "$name-base, $name-claude"
+}
+
+# docker compose for this instance. In compose's interpolation the shell environment beats the
+# env file, so whatever the instance's .env sets is dropped from the environment first: nothing
+# exported in your shell leaks into an instance.
+compose() {
     local drop=() key
     while IFS= read -r key; do drop+=(-u "$key"); done \
         < <(sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' "$INSTANCE/.env")
-    exec env "${drop[@]}" PICKLED_CLAUDE_SRC="$REPO" docker compose \
+    env "${drop[@]}" PICKLED_CLAUDE_SRC="$REPO" docker compose \
         -f "$REPO/compose.yaml" --project-directory "$INSTANCE" --env-file "$INSTANCE/.env" \
         -p "$(project_name "$INSTANCE")" "$@"
 }
 
-INSTANCE=$PWD
-while [ $# -gt 0 ]; do
-    case "$1" in
-        -C) [ $# -ge 2 ] || die "-C needs a directory"
-            [ -d "$2" ] || die "no such directory: $2"
-            INSTANCE=$(cd "$2" && pwd -P); shift 2 ;;
-        -h|--help|help) usage; exit 0 ;;
-        *) break ;;
-    esac
-done
+cmd_up() {
+    require_instance
+    compose up -d --build "$@"
+    echo
+    cmd_info
+}
+
+cmd_delete() {
+    require_instance
+    local name answer
+    name=$(project_name "$INSTANCE")
+    [ "$INSTANCE" != "$REPO" ] || die "refusing to delete the repository itself"
+    if [ "${1:-}" != --yes ]; then
+        echo "This removes instance $name for good: its container, its images and the directory"
+        echo "  $INSTANCE"
+        echo "including workspace/, the login and all conversations."
+        read -r -p "Type $name to confirm: " answer || true
+        [ "$answer" = "$name" ] || die "not confirmed, nothing deleted"
+    fi
+    compose down --remove-orphans
+    # Files the container created as root can be beyond your reach; the instance's own base
+    # image (still there at this point) clears them.
+    if ! rm -rf "$INSTANCE" 2>/dev/null; then
+        docker run --rm --pull never --entrypoint /bin/sh -v "$INSTANCE:/instance" "$name-base" \
+            -c 'find /instance -mindepth 1 -delete'
+        rm -rf "$INSTANCE"
+    fi
+    docker image rm "$name-claude" "$name-base" > /dev/null 2>&1 || true
+    if [ -f "$REGISTRY" ]; then
+        grep -vxF "$INSTANCE" "$REGISTRY" > "$REGISTRY.new" || true
+        mv "$REGISTRY.new" "$REGISTRY"
+    fi
+    echo "deleted instance $name"
+}
+
 [ $# -gt 0 ] || { usage >&2; exit 2; }
+case "$1" in
+    -h|--help|help) usage; exit 0 ;;
+    ls) cmd_ls; exit 0 ;;
+esac
+[ $# -ge 2 ] || die "missing command; usage: $0 INSTANCE init|up|info|ssh|delete|COMPOSE..."
+INSTANCE_ARG=$1; shift
+INSTANCE=$INSTANCE_ARG
 [ -d "$INSTANCE" ] && INSTANCE=$(cd "$INSTANCE" && pwd -P)
 
 case "$1" in
-    init) cmd_init "${2:-$INSTANCE}" ;;
-    ls)   cmd_ls ;;
-    ssh)  shift; cmd_ssh "$@" ;;
-    *)    cmd_compose "$@" ;;
+    init)   cmd_init "$INSTANCE" ;;
+    up)     shift; cmd_up "$@" ;;
+    info)   cmd_info ;;
+    ssh)    shift; cmd_ssh "$@" ;;
+    delete) shift; cmd_delete "$@" ;;
+    *)      require_instance; compose "$@" ;;
 esac

@@ -17,21 +17,31 @@ curl -X PUT -H "Authorization: Bearer $TOKEN" --data-binary @prompt.md http://ho
 
 ## Quick start
 
+Everything goes through `pickled-claude INSTANCE COMMAND`, where `INSTANCE` is the instance's
+directory (relative to where you are, or absolute). From the repository:
+
 ```bash
-ln -s "$PWD/pickled-claude" ~/bin/      # once: put the wrapper on your PATH
-pickled-claude init ~/claude/myproject  # instance dir: .env (free ports, random token, uid/gid),
-cd ~/claude/myproject                   #   authorized_keys, workspace/, .volume_*/
-pickled-claude up -d --build            # build (downloads Claude Code) and start
-pickled-claude logs -f                  # wait for "tmux session 'claude' started"
-pickled-claude ssh                      # attach; on first start finish onboarding and /login here
+./pickled-claude claude1 init      # create ./claude1: .env (free ports, random token, uid/gid),
+                                   #   authorized_keys, image/Dockerfile, workspace/, .volume_*/
+./pickled-claude claude1 up        # build its images (downloads Claude Code), start, show info
+./pickled-claude claude1 logs -f   # wait for "tmux session 'claude' started"
+./pickled-claude claude1 ssh       # attach; on first start finish onboarding and /login here
 ```
+
+| command | effect |
+| --- | --- |
+| `init` | create the instance directory and its settings; leaves existing files alone |
+| `up [ARGS]` | build the instance's images and (re)start it (`docker compose up -d --build`), then `info` |
+| `info` | instance name, state, port mapping with the matching `ssh` command and URL, images |
+| `ssh [ARGS]` | ssh into the instance; without ARGS that attaches to Claude |
+| `delete [--yes]` | remove the container, both images and the whole directory, after you type the instance name |
+| anything else | a `docker compose` command for this instance: `logs -f`, `down`, `ps`, `exec claude bash`, ... |
+
+`pickled-claude ls` lists all instances. To call it from anywhere, link it into your PATH:
+`ln -s "$PWD/pickled-claude" ~/bin/`.
 
 `init` copies your `~/.ssh/*.pub` into the instance's `authorized_keys`. Without one, put at
 least one public key there yourself; the file must exist before `up`.
-
-Every command except `init`, `ssh` and `ls` goes straight to `docker compose`, run for the
-instance in the current directory (or `pickled-claude -C DIR ...`). The repository directory
-is an instance too: `pickled-claude init .` there, and plain `docker compose` works as well.
 
 ### Several instances
 
@@ -39,9 +49,9 @@ Each instance is a directory with its own `.env`, `authorized_keys`, `workspace/
 images, so several run side by side without sharing anything:
 
 ```bash
-pickled-claude init ~/claude/projA       # SSH 2222, HTTP 8080
-pickled-claude init ~/claude/projB       # next free ports: 2223, 8081
-pickled-claude -C ~/claude/projB up -d
+pickled-claude ~/claude/projA init       # SSH 2222, HTTP 8080
+pickled-claude ~/claude/projB init       # next free ports: 2223, 8081
+pickled-claude ~/claude/projB up
 pickled-claude ls                        # name, ports, state and directory of every instance
 ```
 
@@ -59,7 +69,7 @@ into the terminal), or set `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` (fro
 | what | command |
 | --- | --- |
 | attach to Claude | `ssh -p 2222 claude@host` (an interactive login auto-attaches) |
-| same, from the instance directory | `pickled-claude ssh` (`pickled-claude ssh inject ...` etc. work too) |
+| same, by instance | `pickled-claude INSTANCE ssh` (`... ssh inject "text"` etc. work too) |
 | detach | `Ctrl-b d` |
 | plain shell in the container | `ssh -t -p 2222 claude@host bash` |
 | scroll back | `Ctrl-b [`, then arrows / PageUp, `q` to leave |
@@ -138,7 +148,7 @@ Responses are JSON: `{"ok": true, "chars": 30, "lines": 1, "submitted": true}` o
 | `INJECT_ENTER_DELAY` | 0.5 | seconds between paste and Enter |
 | `TZ` | UTC | container time zone |
 
-Changes to `.env` take effect with `pickled-claude up -d`, which recreates the container.
+Changes to `.env` take effect with `pickled-claude INSTANCE up`, which recreates the container.
 The running `claude` process does not survive that, but the conversation does: the new
 container starts `claude --continue` and picks it up where it stopped (`CLAUDE_CONTINUE=0`
 if you would rather start fresh every time). If you ran several conversations in `/workspace`,
@@ -161,8 +171,8 @@ All of it lives in the instance directory, bind-mounted into the container:
 | packages Claude installed with apt/pip/npm | | container layer | `restart`, but not recreate |
 
 Put tools you always want into the instance's `image/Dockerfile` and rebuild (see below).
-`pickled-claude down -v` does not touch any of these directories; to reset an instance, stop
-it and delete them. Files the container wrote there may belong to root or the container's uid,
+`pickled-claude INSTANCE down -v` does not touch any of these directories; to reset an
+instance, stop it and delete them, or remove it entirely with `pickled-claude INSTANCE delete`. Files the container wrote there may belong to root or the container's uid,
 so `sudo rm -rf` may be needed.
 
 ### Clearing old sessions
@@ -171,17 +181,17 @@ The conversations have a directory of their own, so they can go without taking t
 the settings or the per-project trust with them. All of them at once:
 
 ```bash
-pickled-claude down
-rm -rf .volume_sessions/*
-pickled-claude up -d                     # next start has no conversation to continue
+pickled-claude INSTANCE down
+rm -rf INSTANCE/.volume_sessions/*
+pickled-claude INSTANCE up               # next start has no conversation to continue
 ```
 
 Or only the conversations of one working directory, with the container running. `/workspace`
 is stored as `-workspace`, every character that is not a letter or digit becomes a `-`:
 
 ```bash
-pickled-claude exec claude ls /home/claude/.claude/projects
-pickled-claude exec claude rm -rf /home/claude/.claude/projects/-workspace
+pickled-claude INSTANCE exec claude ls /home/claude/.claude/projects
+pickled-claude INSTANCE exec claude rm -rf /home/claude/.claude/projects/-workspace
 ```
 
 Deleting the transcript of the conversation that is open right now confuses the running
@@ -219,7 +229,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends postgresql-clie
 COPY my-tool /usr/local/bin/          # files next to image/Dockerfile
 ```
 
-Then `pickled-claude build && pickled-claude up -d`. A rebuild picks up the repository as it is
+Then `pickled-claude INSTANCE up`, which rebuilds before it starts. A rebuild picks up the repository as it is
 at that moment, and only for this instance: the others keep running what they were built with
 until they are rebuilt themselves. (Docker's build cache is shared by all builds on the host;
 it only skips steps that are identical, so it does not tie the instances together.)
@@ -227,7 +237,7 @@ it only skips steps that are identical, so it does not tie the instances togethe
 ## Updating Claude Code
 
 Claude Code auto-updates itself inside the container (into the container layer). A rebuild
-(`pickled-claude build --pull --no-cache && pickled-claude up -d`) installs the current version
+(`pickled-claude INSTANCE build --pull --no-cache && pickled-claude INSTANCE up`) installs the current version
 into the instance's image. Set `DISABLE_AUTOUPDATER=1` if you want the image to be the only source of truth.
 
 ## Security notes
@@ -256,13 +266,13 @@ into the instance's image. Set `DISABLE_AUTOUPDATER=1` if you want the image to 
   changes how the process is named): set `INJECT_EXPECT_CMD=<that name>` in the container
   environment, or `INJECT_EXPECT_CMD=` to disable the check.
 - **"bind source path does not exist" on `up`**: create `authorized_keys` in the instance
-  directory (`pickled-claude init .` does).
-- **`pickled-claude: no .env in ...`**: you are not in an instance directory. `cd` into one,
-  pass `-C DIR`, or create one with `pickled-claude init`.
+  directory (`pickled-claude INSTANCE init` does).
+- **`pickled-claude: ... is not an instance (no .env)`**: the path does not point at an
+  instance directory. `pickled-claude ls` shows where they are; `... init` creates one.
 - **"port is already allocated" on `up`**: another instance or program has the port. Change
   `SSH_PORT`/`INJECT_PORT` in `.env`; `pickled-claude ls` shows what the instances use.
 - **SSH host key warning**: the instance's `.volume_ssh_hostkeys/` was deleted, so it has a new
-  key. `pickled-claude ssh` stores host keys under the instance name; remove that line from
+  key. `pickled-claude INSTANCE ssh` stores host keys under the instance name; remove that line from
   `~/.ssh/known_hosts` (`ssh-keygen -R <name>`).
 - **Permission denied in `/workspace`**: the directory is owned by another uid. Set `UID`/`GID`
   in `.env` to the owner and rebuild, or `chown` it.
@@ -273,7 +283,7 @@ into the instance's image. Set `DISABLE_AUTOUPDATER=1` if you want the image to 
 
 ```
 Dockerfile, compose.yaml, .env.example
-pickled-claude           wrapper: init / ssh / ls, everything else is docker compose
+pickled-claude           INSTANCE init|up|info|ssh|delete, else docker compose; ls
 container/
   entrypoint.sh          sshd + tmux session + HTTP injector, writes /etc/claude-container.conf
   inject-server.py       HTTP API (python3 stdlib only)

@@ -2,7 +2,7 @@
 #
 # Every relative path below belongs to the instance directory (compose's project directory),
 # so several instances can run side by side, each from its own directory with its own .env.
-# Create one with "./pickled-claude init DIR" and drive it with "pickled-claude ..." from there.
+# Create one with "./pickled-claude DIR init" and drive it with "./pickled-claude DIR up|info|...".
 # The repository directory is an instance too: plain "docker compose up -d" here still works.
 #
 # The project name comes from COMPOSE_PROJECT_NAME in the instance's .env (falls back to the
