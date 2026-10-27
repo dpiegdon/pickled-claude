@@ -56,7 +56,7 @@ mkdir -p "$HOME_DIR/.ssh"
     if [ -f /config/authorized_keys ]; then cat /config/authorized_keys; fi
     if [ -n "${AUTHORIZED_KEYS:-}" ]; then printf '%s\n' "$AUTHORIZED_KEYS"; fi
 } | grep -v '^[[:space:]]*$' > "$HOME_DIR/.ssh/authorized_keys" || true
-chown -R "$USER_NAME:$USER_NAME" "$HOME_DIR/.ssh"
+chown -R "$USER_NAME:" "$HOME_DIR/.ssh"
 chmod 700 "$HOME_DIR/.ssh"
 chmod 600 "$HOME_DIR/.ssh/authorized_keys"
 if [ -s "$HOME_DIR/.ssh/authorized_keys" ]; then
@@ -70,7 +70,7 @@ for dir in "$HOME_DIR/.claude" "$HOME_DIR/.claude/projects" /commandhistory /wor
     mkdir -p "$dir"          # a volume mount always exists, a plain path may not
     if ! runuser -u "$USER_NAME" -- test -w "$dir"; then
         log "making $dir writable for $USER_NAME"
-        chown "$USER_NAME:$USER_NAME" "$dir"
+        chown "$USER_NAME:" "$dir"
     fi
 done
 
@@ -81,8 +81,9 @@ mkdir -p /run/sshd
 SSHD_PID=$!
 log "sshd listening on :22"
 
-# Runs a command as the unprivileged user. The HTTP token is deliberately not passed on,
-# so the Claude session never sees it.
+# Runs a command as the unprivileged user. The HTTP token is not passed on, so it is not in the
+# Claude session's environment. That is tidiness, not a secret boundary: the injector runs as
+# the same user, so its /proc/PID/environ is readable from the session (and sudo is open anyway).
 as_user() {
     runuser -u "$USER_NAME" -- env -u INJECT_TOKEN \
         HOME="$HOME_DIR" USER="$USER_NAME" LOGNAME="$USER_NAME" SHELL=/bin/bash \

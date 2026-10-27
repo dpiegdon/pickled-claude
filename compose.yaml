@@ -5,6 +5,8 @@ services:
   claude:
     build:
       context: .
+      # The build uses the host's network stack (DNS, proxies) instead of a bridge.
+      network: host
       args:
         UID: ${UID:-1000}
         GID: ${GID:-1000}
@@ -15,12 +17,12 @@ services:
     restart: unless-stopped
     ports:
       # host port 22 belongs to the host's own sshd, hence 2222 by default
-      - "${BIND_ADDR:-0.0.0.0}:${SSH_PORT:-2222}:22"
-      - "${BIND_ADDR:-0.0.0.0}:${INJECT_PORT:-8080}:8080"
-    # Hand the access/error log to the host's journald, which owns rotation
-    # and retention:  journalctl -t ledger -f   (docker compose logs works
-    # too). No journald on the host (Docker Desktop)? Use `driver: local` —
-    # it rotates by default; `json-file` does not.
+      - "${BIND_ADDR:-127.0.0.1}:${SSH_PORT:-2222}:22"
+      - "${BIND_ADDR:-127.0.0.1}:${INJECT_PORT:-8080}:8080"
+    # Hand the container's output to the host's journald, which owns rotation and retention:
+    #   journalctl -t pickled-claude -f      (docker compose logs works too)
+    # No journald on the host (Docker Desktop)? Use `driver: local`, it rotates by default;
+    # `json-file` does not.
     logging:
       driver: journald
       options:
@@ -41,51 +43,17 @@ services:
     configs:
       - source: authorized_keys
         target: /config/authorized_keys
+    # Plain bind mounts: compose resolves them against this directory and creates missing
+    # directories. Wiping one of them (container stopped) is "rm -rf DIR".
     volumes:
-      - claude-history:/commandhistory
-      - claude-config:/home/claude/.claude
-      - claude-sessions:/home/claude/.claude/projects
-      - claude-ssh-hostkeys:/etc/ssh/hostkeys
-      - claude-workspace:/workspace
+      - ./.volume_commandhistory:/commandhistory           # bash history
+      - ./.volume_config:/home/claude/.claude              # login, settings, .claude.json
+      # Mounted inside the one above: the conversations, so they can be dropped on their own
+      # without touching the login.
+      - ./.volume_sessions:/home/claude/.claude/projects
+      - ./.volume_ssh_hostkeys:/etc/ssh/hostkeys           # stable SSH host key across recreates
+      - ./workspace:/workspace                             # the projects Claude works on
 
 configs:
   authorized_keys:
     file: ./authorized_keys
-
-volumes:
-  claude-history:
-      # bash history
-      driver: local
-      driver_opts:
-        type: none
-        o: bind
-        device: ./.volume_commandhistory
-  claude-config:
-      # login, settings, .claude.json
-      driver: local
-      driver_opts:
-        type: none
-        o: bind
-        device: ./.volume_config
-  claude-sessions:
-      # Mounted inside claude-config: the conversations, so they can be dropped on their own
-      # ("docker volume rm pickled-claude_claude-sessions") without touching the login.
-      driver: local
-      driver_opts:
-        type: none
-        o: bind
-        device: ./.volume_sessions
-  claude-ssh-hostkeys:
-      # stable SSH host key across recreates
-      driver: local
-      driver_opts:
-        type: none
-        o: bind
-        device: ./.volume_ssh_hostkeys
-  claude-workspace:
-      # the projects Claude works on
-      driver: local
-      driver_opts:
-        type: none
-        o: bind
-        device: ./workspace

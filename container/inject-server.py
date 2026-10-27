@@ -171,6 +171,14 @@ class Handler(BaseHTTPRequestHandler):
         sys.stderr.write("[inject-server] %s %s\n" % (self.address_string(), fmt % args))
         sys.stderr.flush()
 
+    def log_request(self, code="-", size="-"):
+        # The stock version logs the raw request line, which would put ?token=... into the log.
+        url = urlparse(self.path)
+        query = "&".join("%s=%s" % (k, "***" if k == "token" else v)
+                         for k, vs in parse_qs(url.query).items() for v in vs)
+        path = url.path + ("?" + query if query else "")
+        self.log_message('"%s %s" %s %s', self.command, path, getattr(code, "value", code), size)
+
     def reply(self, status, payload, ctype="application/json", headers=()):
         if isinstance(payload, (dict, list)):
             body = (json.dumps(payload) + "\n").encode("utf-8")

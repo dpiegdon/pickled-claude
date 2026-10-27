@@ -45,8 +45,8 @@ if [ -n "${CLAUDE_ARGS:-}" ]; then
     cmd+=" ${CLAUDE_ARGS}"
 fi
 
-# Window 0 is a login shell; the claude command is typed into it so that a shell prompt
-# remains when claude exits (type "claude" to start it again).
+# The window (index 1, see base-index in tmux.conf) is a login shell; the claude command is
+# typed into it so that a shell prompt remains when claude exits (type "claude" to start it again).
 tmux new-session -d -s "$SESSION" -n claude -c "$WORKDIR" -x 200 -y 50
 tmux send-keys -t "=$SESSION:claude.0" "$cmd" Enter
 echo "tmux session '$SESSION' started in $WORKDIR: $cmd$note"
