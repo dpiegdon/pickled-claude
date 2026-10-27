@@ -23,8 +23,8 @@ services:
       # The build uses the host's network stack (DNS, proxies) instead of a bridge.
       network: host
       args:
-        UID: ${UID:-1000}
-        GID: ${GID:-1000}
+        UID: ${UID:-30000}
+        GID: ${GID:-30000}
     scale: 0
 
   claude:
@@ -39,9 +39,8 @@ services:
     init: true
     restart: unless-stopped
     ports:
-      # host port 22 belongs to the host's own sshd, hence 2222 by default
-      - "${BIND_ADDR:-127.0.0.1}:${SSH_PORT:-2222}:22"
-      - "${BIND_ADDR:-127.0.0.1}:${INJECT_PORT:-8080}:8080"
+      - "${BIND_ADDR:-127.0.0.1}:${SSH_PORT:-30000}:22"
+      - "${BIND_ADDR:-127.0.0.1}:${INJECT_PORT:-31000}:8080"
     # Hand the container's output to the host's journald, which owns rotation and retention:
     #   journalctl -t <project>-claude-1 -f      (docker compose logs works too)
     # No journald on the host (Docker Desktop)? Use `driver: local`, it rotates by default;

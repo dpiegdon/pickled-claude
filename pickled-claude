@@ -72,6 +72,23 @@ port_taken() {
     return 1
 }
 
+# An id (uid and gid alike) is taken when a host user or group has it, or another instance.
+id_taken() {
+    local id=$1 dir
+    { getent passwd "$id" || getent group "$id"; } > /dev/null 2>&1 && return 0
+    while IFS= read -r dir; do
+        [ "$(env_get UID "$dir/.env")" = "$id" ] && return 0
+        [ "$(env_get GID "$dir/.env")" = "$id" ] && return 0
+    done < <(instances)
+    return 1
+}
+
+free_id() {
+    local id=$1
+    while id_taken "$id"; do id=$((id + 1)); done
+    printf '%s' "$id"
+}
+
 free_port() {
     local port=$1
     while port_taken "$port"; do port=$((port + 1)); done
@@ -101,20 +118,22 @@ cmd_init() {
         while name_taken "$name"; do name=$base-$n; n=$((n + 1)); done
 
         local ssh_port inject_port
-        ssh_port=$(free_port 2222)
-        inject_port=$(free_port 8080)
+        ssh_port=$(free_port 30000)
+        inject_port=$(free_port 31000)
+        local id
+        id=$(free_id 30000)
         token=$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
 
         sed -e "s|^COMPOSE_PROJECT_NAME=.*|COMPOSE_PROJECT_NAME=$name|" \
             -e "s|^SSH_PORT=.*|SSH_PORT=$ssh_port|" \
             -e "s|^INJECT_PORT=.*|INJECT_PORT=$inject_port|" \
             -e "s|^INJECT_TOKEN=.*|INJECT_TOKEN=$token|" \
-            -e "s|^UID=.*|UID=$(id -u)|" \
-            -e "s|^GID=.*|GID=$(id -g)|" \
+            -e "s|^UID=.*|UID=$id|" \
+            -e "s|^GID=.*|GID=$id|" \
             "$REPO/.env.example" > "$dir/.env"
         chmod 600 "$dir/.env"
         echo "created .env: instance $name, SSH port $ssh_port, HTTP port $inject_port," \
-             "random INJECT_TOKEN, UID/GID $(id -u)/$(id -g)"
+             "random INJECT_TOKEN, UID/GID $id/$id"
     fi
 
     if [ ! -s "$dir/authorized_keys" ]; then
@@ -197,7 +216,7 @@ cmd_ssh() {
     case "$host" in ''|0.0.0.0|'::') host=localhost ;; esac
     port=$(env_get SSH_PORT "$INSTANCE/.env")
     # HostKeyAlias: known_hosts tracks each instance by name, not by a port another one may reuse.
-    exec ssh -p "${port:-2222}" -o HostKeyAlias="$(project_name "$INSTANCE")" "claude@$host" "$@"
+    exec ssh -p "${port:-30000}" -o HostKeyAlias="$(project_name "$INSTANCE")" "claude@$host" "$@"
 }
 
 cmd_info() {
@@ -205,8 +224,8 @@ cmd_info() {
     local name env=$INSTANCE/.env bind ssh_port http_port host state ports filter
     name=$(project_name "$INSTANCE")
     bind=$(env_get BIND_ADDR "$env"); bind=${bind:-127.0.0.1}
-    ssh_port=$(env_get SSH_PORT "$env"); ssh_port=${ssh_port:-2222}
-    http_port=$(env_get INJECT_PORT "$env"); http_port=${http_port:-8080}
+    ssh_port=$(env_get SSH_PORT "$env"); ssh_port=${ssh_port:-30000}
+    http_port=$(env_get INJECT_PORT "$env"); http_port=${http_port:-31000}
     case "$bind" in 0.0.0.0|'::') host=localhost ;; *) host=$bind ;; esac
     mapfile -t filter < <(claude_container "$name")
     state=$(docker ps -a "${filter[@]}" --format '{{.Status}}' 2>/dev/null | head -n 1 || true)

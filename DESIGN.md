@@ -1,6 +1,6 @@
 # Design concept: Claude Code in tmux inside Docker
 
-Status: agreed 2026-09-10, implemented. Decisions: skip-permissions on by default (`CLAUDE_SKIP_PERMISSIONS=0` disables), ports configurable with host SSH default 2222, no egress firewall, Debian 13 trixie.
+Status: agreed 2026-09-10, implemented. Decisions: skip-permissions on by default (`CLAUDE_SKIP_PERMISSIONS=0` disables), ports configurable (host defaults 30000 SSH / 31000 HTTP since 2026-10-27), no egress firewall, Debian 13 trixie.
 
 ## Goals
 
@@ -24,7 +24,7 @@ firewall (see "Optional add-ons").
  host / LAN                          container "<instance>-claude-1" (debian:trixie-slim)
  ------------                        ------------------------------------------------
                                      tini (init) -> entrypoint.sh (root)
- ssh -p 2222 claude@host  ------->   sshd :22 (key auth only, user "claude")
+ ssh -p 30000 claude@host  ------->   sshd :22 (key auth only, user "claude")
    plain login = tmux attach            |  login shell -> auto `tmux attach -t claude`
    ssh ... inject "text"                |  remote cmd  -> /usr/local/bin/inject
    ssh ... peek                         |
@@ -33,7 +33,7 @@ firewall (see "Optional add-ons").
                                         window 1: login bash -> `claude $CLAUDE_ARGS`
                                         cwd /workspace
                                         ^
- curl -X PUT :8080/prompt  ------->  inject-server.py :8080 (uid claude, python3 stdlib)
+ curl -X PUT :31000/prompt ------->  inject-server.py :8080 (uid claude, python3 stdlib)
    Authorization: Bearer <token>       PUT/POST /prompt, POST /keys, GET /screen, GET /health
 
  bind mounts from the instance directory:
@@ -51,8 +51,8 @@ firewall (see "Optional add-ons").
 
 - Base `debian:trixie-slim`. Packages: `tmux ncurses-term openssh-server sudo git curl wget
   ca-certificates gnupg python3 procps psmisc less nano jq unzip zip xz-utils iproute2 tzdata`.
-- User `claude` with build-time `UID`/`GID` args (default 1000) so files in `/workspace` are
-  owned by the host user. `/etc/sudoers.d/claude`: `claude ALL=(ALL) NOPASSWD:ALL`.
+- User `claude` with build-time `UID`/`GID` args, unique per instance and different from the
+  host user's (decision 10). `/etc/sudoers.d/claude`: `claude ALL=(ALL) NOPASSWD:ALL`.
   This is what makes "install stuff on demand" work.
 - Claude Code via the native installer (`curl -fsSL https://claude.ai/install.sh | bash`) as
   user `claude`, plus a symlink `/usr/local/bin/claude` so non-login shells find it.
@@ -98,9 +98,9 @@ firewall (see "Optional add-ons").
 
 ### Attaching
 
-- `ssh -p 2222 claude@host`: an interactive login runs `/etc/profile.d/99-tmux-autoattach.sh`,
+- `ssh -p 30000 claude@host`: an interactive login runs `/etc/profile.d/99-tmux-autoattach.sh`,
   which `exec`s `tmux attach -t claude`. Detach with the usual `Ctrl-b d`.
-- `ssh -t -p 2222 claude@host bash`: plain shell without attaching (non-login shell skips
+- `ssh -t -p 30000 claude@host bash`: plain shell without attaching (non-login shell skips
   profile.d).
 - Several people/terminals can attach at once; tmux resizes to the smallest client.
 
@@ -134,8 +134,8 @@ tmux send-keys -t claude:claude.0 Enter
 | `attach` | (re)create the session if needed and attach |
 | `start-claude-session` | idempotent session creation, used by entrypoint and `attach` |
 
-Examples: `ssh -p 2222 claude@host inject "run the tests and fix failures"`,
-`ssh -p 2222 claude@host inject < prompt.md`, `ssh -p 2222 claude@host peek 200`.
+Examples: `ssh -p 30000 claude@host inject "run the tests and fix failures"`,
+`ssh -p 30000 claude@host inject < prompt.md`, `ssh -p 30000 claude@host peek 200`.
 
 ### HTTP API (inject-server.py, python3 stdlib, no dependencies)
 
@@ -149,7 +149,7 @@ Body limit 1 MiB.
 | `GET /screen[?lines=N]` | | `tmux capture-pane`, text/plain |
 | `GET /health` | | `{"ok":true,"session":true}`, no auth |
 
-Example: `curl -X PUT -H "Authorization: Bearer $TOKEN" --data-binary @prompt.txt http://host:8080/prompt`
+Example: `curl -X PUT -H "Authorization: Bearer $TOKEN" --data-binary @prompt.txt http://host:31000/prompt`
 
 ### Configuration (.env)
 
@@ -160,14 +160,14 @@ Example: `curl -X PUT -H "Authorization: Bearer $TOKEN" --data-binary @prompt.tx
 | `CLAUDE_SKIP_PERMISSIONS` | 1 | start with `--dangerously-skip-permissions`; `0` = normal permission prompts |
 | `CLAUDE_ARGS` | empty | extra args, e.g. `--continue`, `--model ...` |
 | `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` | empty | non-interactive auth; otherwise attach once and `/login` |
-| `SSH_PORT` / `INJECT_PORT` | 2222 / 8080 | host ports |
+| `SSH_PORT` / `INJECT_PORT` | 30000 / 31000 | host ports, next free ones per instance |
 | `BIND_ADDR` | 127.0.0.1 | set `0.0.0.0` to expose to the network |
-| `UID` / `GID` | 1000 / 1000 | in-container user, build args |
+| `UID` / `GID` | 30000 / 30000 | in-container user, unique per instance, build args |
 | `TZ` | UTC | |
 | `DISABLE_AUTOUPDATER` | empty | set `1` to pin the image's version |
 
 `pickled-claude DIR init` creates `.env` with a unique instance name, free ports, a random token
-and your uid/gid, copies your public keys into `authorized_keys`, creates `workspace/` and the
+and its own uid/gid, copies your public keys into `authorized_keys`, creates `workspace/` and the
 `.volume_*/` directories and `image/Dockerfile`. Then `pickled-claude DIR up`.
 
 ### Instances
@@ -274,8 +274,8 @@ pickled-claude/
 ## Decisions (2026-09-10)
 
 1. Permission mode: `--dangerously-skip-permissions` on by default, `CLAUDE_SKIP_PERMISSIONS=0` disables.
-2. Ports: `SSH_PORT` (default 2222, host port 22 belongs to the host's sshd) and
-   `INJECT_PORT` (default 8080) configurable. `BIND_ADDR` defaults to `127.0.0.1` since
+2. Ports: `SSH_PORT` and `INJECT_PORT` configurable; defaults 30000 and 31000 since 2026-10-27
+   (were 2222 and 8080), `init` takes the next free pair. `BIND_ADDR` defaults to `127.0.0.1` since
    2026-10-27 (was all interfaces): the HTTP token is clear text and grants root in the container.
 3. No egress firewall.
 4. Debian 13 trixie.
@@ -300,3 +300,8 @@ pickled-claude/
 9. (2026-10-27) Nothing is shared between instances implicitly, images included: each builds
    its own base from the repository and its own overlay from `image/Dockerfile` on top.
    Repository changes reach an instance when that instance is rebuilt, not before.
+10. (2026-10-27) Every instance runs as its own uid/gid, not the host user's: `init` takes the
+    next id from 30000 that no host user or group and no other instance uses. An instance can
+    then write neither the host user's files nor another instance's. The price: the host user
+    cannot edit an instance's `workspace/` directly, and `delete` normally needs its fallback,
+    a container of the instance's base image that removes the files as root.

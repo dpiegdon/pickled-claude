@@ -10,9 +10,9 @@ HTTP. Claude can install whatever it needs (`sudo apt-get ...`) because the cont
 sandbox. Design notes are in [DESIGN.md](DESIGN.md).
 
 ```
-ssh -p 2222 claude@host                 -> attached to the tmux session (Ctrl-b d detaches)
-ssh -p 2222 claude@host inject "text"   -> pastes "text" into Claude and presses Enter
-curl -X PUT -H "Authorization: Bearer $TOKEN" --data-binary @prompt.md http://host:8080/prompt
+ssh -p 30000 claude@host                 -> attached to the tmux session (Ctrl-b d detaches)
+ssh -p 30000 claude@host inject "text"   -> pastes "text" into Claude and presses Enter
+curl -X PUT -H "Authorization: Bearer $TOKEN" --data-binary @prompt.md http://host:31000/prompt
 ```
 
 ## Quick start
@@ -21,7 +21,7 @@ Everything goes through `pickled-claude INSTANCE COMMAND`, where `INSTANCE` is t
 directory (relative to where you are, or absolute). From the repository:
 
 ```bash
-./pickled-claude claude1 init      # create ./claude1: .env (free ports, random token, uid/gid),
+./pickled-claude claude1 init      # create ./claude1: .env (free ports, own uid/gid, token),
                                    #   authorized_keys, image/Dockerfile, workspace/, .volume_*/
 ./pickled-claude claude1 up        # build its images (downloads Claude Code), start, show info
 ./pickled-claude claude1 logs -f   # wait for "tmux session 'claude' started"
@@ -50,8 +50,8 @@ Each instance is a directory with its own `.env`, `authorized_keys`, `workspace/
 images, so several run side by side without sharing anything:
 
 ```bash
-pickled-claude ~/claude/projA init       # SSH 2222, HTTP 8080
-pickled-claude ~/claude/projB init       # next free ports: 2223, 8081
+pickled-claude ~/claude/projA init       # SSH 30000, HTTP 31000, uid/gid 30000
+pickled-claude ~/claude/projB init       # next free: 30001, 31001, uid/gid 30001
 pickled-claude ~/claude/projB up
 pickled-claude ls                        # name, ports, state and directory of every instance
 ```
@@ -69,10 +69,10 @@ into the terminal), or set `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` (fro
 
 | what | command |
 | --- | --- |
-| attach to Claude | `ssh -p 2222 claude@host` (an interactive login auto-attaches) |
+| attach to Claude | `ssh -p 30000 claude@host` (an interactive login auto-attaches) |
 | same, by instance | `pickled-claude INSTANCE ssh` (`... ssh inject "text"` etc. work too) |
 | detach | `Ctrl-b d` |
-| plain shell in the container | `ssh -t -p 2222 claude@host bash` |
+| plain shell in the container | `ssh -t -p 30000 claude@host bash` |
 | scroll back | `Ctrl-b [`, then arrows / PageUp, `q` to leave |
 
 Several terminals can be attached at the same time. Detaching leaves Claude running.
@@ -82,11 +82,11 @@ Several terminals can be attached at the same time. Detaching leaves Claude runn
 ### Via SSH
 
 ```bash
-ssh -p 2222 claude@host inject "run the test suite and fix what fails"
-ssh -p 2222 claude@host inject < prompt.md          # multi-line text from a file
-ssh -p 2222 claude@host inject -n "typed but not submitted"
-ssh -p 2222 claude@host inject -k Escape            # raw keys: Escape, C-c, y, Down Enter, ...
-ssh -p 2222 claude@host peek 100                    # screen contents + 100 lines scrollback
+ssh -p 30000 claude@host inject "run the test suite and fix what fails"
+ssh -p 30000 claude@host inject < prompt.md          # multi-line text from a file
+ssh -p 30000 claude@host inject -n "typed but not submitted"
+ssh -p 30000 claude@host inject -k Escape            # raw keys: Escape, C-c, y, Down Enter, ...
+ssh -p 30000 claude@host peek 100                    # screen contents + 100 lines scrollback
 ```
 
 Prefer stdin for anything with quotes or special characters, because the argument form goes
@@ -105,11 +105,11 @@ All endpoints except `/health` need `Authorization: Bearer <INJECT_TOKEN>` (or `
 
 ```bash
 TOKEN=$(sed -n 's/^INJECT_TOKEN=//p' .env)
-curl -X PUT -H "Authorization: Bearer $TOKEN" --data-binary 'summarize the git log of today' http://localhost:8080/prompt
-curl -X PUT -H "Authorization: Bearer $TOKEN" --data-binary @prompt.md http://localhost:8080/prompt
+curl -X PUT -H "Authorization: Bearer $TOKEN" --data-binary 'summarize the git log of today' http://localhost:31000/prompt
+curl -X PUT -H "Authorization: Bearer $TOKEN" --data-binary @prompt.md http://localhost:31000/prompt
 curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-     --data '{"text": "line one\nline two", "submit": false}' http://localhost:8080/prompt
-curl -H "Authorization: Bearer $TOKEN" 'http://localhost:8080/screen?lines=50'
+     --data '{"text": "line one\nline two", "submit": false}' http://localhost:31000/prompt
+curl -H "Authorization: Bearer $TOKEN" 'http://localhost:31000/screen?lines=50'
 ```
 
 Responses are JSON: `{"ok": true, "chars": 30, "lines": 1, "submitted": true}` or
@@ -134,8 +134,8 @@ Responses are JSON: `{"ok": true, "chars": 30, "lines": 1, "submitted": true}` o
 | variable | default | meaning |
 | --- | --- | --- |
 | `INJECT_TOKEN` | empty | bearer token for HTTP. Empty disables the HTTP injector; SSH `inject` still works |
-| `SSH_PORT` | 2222 | host port for SSH (22 stays with the host's own sshd) |
-| `INJECT_PORT` | 8080 | host port for the HTTP API |
+| `SSH_PORT` | 30000 | host port for SSH; `init` picks the next free one |
+| `INJECT_PORT` | 31000 | host port for the HTTP API; `init` picks the next free one |
 | `COMPOSE_PROJECT_NAME` | directory name | instance name, unique per host; `init` sets it |
 | `BIND_ADDR` | 127.0.0.1 | `0.0.0.0` to expose both ports to the network |
 | `CONTAINER_HOSTNAME` | pickle | hostname inside the container |
@@ -144,7 +144,7 @@ Responses are JSON: `{"ok": true, "chars": 30, "lines": 1, "submitted": true}` o
 | `CLAUDE_ARGS` | empty | extra `claude` arguments, e.g. `--model opus`. An explicit `--continue`/`--resume` overrides `CLAUDE_CONTINUE` |
 | `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` | empty | non-interactive login |
 | `DISABLE_AUTOUPDATER` | empty | `1` pins the version baked into the image |
-| `UID`, `GID` | 1000 | in-container user; build args, rebuild after changing |
+| `UID`, `GID` | 30000 | in-container user, unique per instance (`init` picks the next id from 30000 that no host user or group and no other instance has); build args |
 | `AUTHORIZED_KEYS` | empty | one extra public key; several go into `./authorized_keys` |
 | `INJECT_ENTER_DELAY` | 0.5 | seconds between paste and Enter |
 | `TZ` | UTC | container time zone |
@@ -277,8 +277,14 @@ into the instance's image. Set `DISABLE_AUTOUPDATER=1` if you want the image to 
 - **SSH host key warning**: the instance's `.volume_ssh_hostkeys/` was deleted, so it has a new
   key. `pickled-claude INSTANCE ssh` stores host keys under the instance name; remove that line from
   `~/.ssh/known_hosts` (`ssh-keygen -R <name>`).
-- **Permission denied in `/workspace`**: the directory is owned by another uid. Set `UID`/`GID`
-  in `.env` to the owner and rebuild, or `chown` it.
+- **You cannot read or change files in `INSTANCE/workspace/`**: on purpose. They belong to the
+  instance's own uid (`UID` in its `.env`), not to you, so no instance can touch your files or
+  another instance's. Work on them through the instance (`... ssh`, `... exec claude bash`,
+  git push/pull), or with `sudo`. `delete` removes them through a container of the instance's
+  base image.
+- **Permission denied in `/workspace` inside the container**: something there belongs to another
+  uid, e.g. files you copied in from the host. `sudo chown -R <UID>:<GID> INSTANCE/workspace`
+  with the instance's `UID`/`GID` from its `.env`.
 - **Claude complains about running as root / refuses skip-permissions**: it is not started via
   the entrypoint. Use `attach` or `start-claude-session`, both run as user `claude`.
 

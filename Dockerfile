@@ -2,8 +2,8 @@
 # Claude Code inside a tmux session, reachable via SSH and a small HTTP injection API.
 FROM debian:trixie-slim
 
-ARG UID=1000
-ARG GID=1000
+ARG UID=30000
+ARG GID=30000
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
