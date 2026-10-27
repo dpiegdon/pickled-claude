@@ -121,6 +121,16 @@ run "$T/work" projA build --pull --no-cache
 check "build options go to the base image only" test \
     "$(grep -F "$C" "$T/log")" = "$C build --pull --no-cache base
 $C build claude"
+cp "$A/image/Dockerfile" "$T/df.good"
+printf 'FROM base\n' > "$A/image/Dockerfile"
+: > "$T/log"
+run "$T/work" projA up; rc=$?
+check "an overlay not built on \${BASE} is refused before building" test "$rc" = 1 -a ! -s "$T/log"
+check "and the message shows the right header" grep -qF 'FROM ${BASE}' "$T/out"
+printf 'ARG BASE\nFROM $BASE AS custom\nRUN true\n' > "$A/image/Dockerfile"
+run "$T/work" projA build
+check "FROM \$BASE with a stage name is accepted" test "$?" = 0
+cp "$T/df.good" "$A/image/Dockerfile"
 : > "$T/log"
 RUN_ENV=(GID=4242 SSH_PORT=1)
 run "$T/work" projA up

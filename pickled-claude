@@ -241,6 +241,13 @@ compose() {
 # changed, and it cannot be pulled from anywhere.
 cmd_build() {
     require_instance
+    local overlay=$INSTANCE/image/Dockerfile
+    [ -f "$overlay" ] || die "$overlay is missing; '$0 $INSTANCE_ARG init' creates it"
+    grep -Eq '^[[:space:]]*FROM[[:space:]]+\$\{?BASE\}?([[:space:]]|$)' "$overlay" ||
+        die "$overlay does not build on this instance's base image. It must start with
+    ARG BASE=pickled-claude-base
+    FROM \${BASE}
+(an image/Dockerfile from before this change says 'FROM base')"
     compose build "$@" base
     compose build claude
 }
@@ -271,8 +278,10 @@ cmd_delete() {
     # image (still there at this point) clears them.
     if ! rm -rf "$INSTANCE" 2>/dev/null; then
         docker run --rm --pull never --entrypoint /bin/sh -v "$INSTANCE:/instance" "$name-base" \
-            -c 'find /instance -mindepth 1 -delete'
-        rm -rf "$INSTANCE"
+            -c 'find /instance -mindepth 1 -delete' || true
+        rm -rf "$INSTANCE" 2>/dev/null ||
+            echo "pickled-claude: could not remove everything in $INSTANCE (files owned by" \
+                 "root?); finish with: sudo rm -rf $(printf '%q' "$INSTANCE")" >&2
     fi
     docker image rm "$name-claude" "$name-base" > /dev/null 2>&1 || true
     if [ -f "$REGISTRY" ]; then
