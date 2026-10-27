@@ -204,7 +204,7 @@ A new instance shows the model, context window use and the plan's 5-hour and wee
 limits (with their reset times) below Claude's input, but no cost figure:
 
 ```
-Opus 5.5 │ ctx 23% (46k/200k) │ 5h 12% ↻14:40 │ 7d 85% ↻Mon 08:00
+Opus 5.5 | ctx 23% (46k/200k) | 5h 12% (14:40) | 7d 85% (Mon 08:00)
 ```
 
 On its first start, the entrypoint writes `.volume_config/settings.json` pointing `statusLine`

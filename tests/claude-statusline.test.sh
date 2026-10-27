@@ -34,8 +34,14 @@ FULL='{"model":{"display_name":"Opus 5.5"},"cost":{"total_cost_usd":1.23},
 
 echo "# claude-statusline"
 case_ "model, context and both limits" "$FULL" -- \
-    "Opus 5.5" "ctx 23% (46k/200k)" "5h 12% ↻14:40" "7d 85% ↻Mon 08:00"
+    "Opus 5.5" "ctx 23% (46k/200k)" "5h 12% (14:40)" "7d 85% (Mon 08:00)"
 case_ "never shows the cost" "$FULL" -- '!1.23' '!$'
+out=$(printf '%s' "$FULL" | "$SCRIPT" | sed 's/\x1b\[[0-9;]*m//g')
+if printf '%s' "$out" | LC_ALL=C grep -q '[^ -~]'; then
+    fail=$((fail+1)); echo "FAIL - plain ASCII only (no glyphs of ambiguous width): $out"
+else
+    pass=$((pass+1)); echo "ok   - plain ASCII only (no glyphs of ambiguous width)"
+fi
 case_ "context percentage computed when not given" \
     '{"model":{"display_name":"M"},"context_window":{"context_window_size":200000,"current_usage":{"input_tokens":100000}}}' \
     -- "ctx 50% (100k/200k)"
