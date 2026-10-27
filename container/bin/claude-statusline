@@ -1,0 +1,24 @@
+#!/bin/bash
+# Claude Code status line: model, context window use and plan usage limits.
+# Deliberately shows no cost figure. Fields missing from the input are left out.
+# A new instance gets it through the settings.json the entrypoint creates.
+jq -r '
+  def color($p): if $p == null then "" elif $p >= 80 then "\u001b[31m" elif $p >= 50 then "\u001b[33m" else "\u001b[32m" end;
+  def pct($p): if $p == null then "-" else "\(color($p))\($p | floor)%\u001b[0m" end;
+  def k: if . == null then "?" elif . >= 1000 then "\(. / 1000 | floor)k" else "\(.)" end;
+  def reset($fmt): try (
+      (if type == "number" then . else sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | fromdateiso8601 end)
+      | " ↻" + strflocaltime($fmt)) catch "";
+  def limit($name; $l; $fmt):
+      if $l == null then empty else "\($name) \(pct($l.used_percentage))\($l.resets_at // empty | reset($fmt))" end;
+
+  (.context_window // {}) as $cw
+  | ($cw.current_usage // {}) as $u
+  | (($u.input_tokens // 0) + ($u.cache_creation_input_tokens // 0) + ($u.cache_read_input_tokens // 0)) as $used
+  | ($cw.used_percentage // (if $cw.context_window_size then $used * 100 / $cw.context_window_size else null end)) as $ctx
+  | [ (.model.display_name // empty),
+      (if $cw == {} then empty else "ctx \(pct($ctx)) (\(if $used > 0 then $used else null end | k)/\($cw.context_window_size | k))" end),
+      limit("5h"; .rate_limits.five_hour; "%H:%M"),
+      limit("7d"; .rate_limits.seven_day; "%a %H:%M")
+    ] | join(" │ ")
+'

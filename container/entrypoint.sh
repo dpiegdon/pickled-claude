@@ -74,6 +74,22 @@ for dir in "$HOME_DIR/.claude" "$HOME_DIR/.claude/projects" /commandhistory /wor
     fi
 done
 
+# ---- Claude Code settings for a new instance ----------------------------------------------------
+# Only when there is no settings.json yet: once it exists it is the user's, edits and all.
+settings="$HOME_DIR/.claude/settings.json"
+if [ ! -e "$settings" ]; then
+    log "creating $settings with the usage status line"
+    runuser -u "$USER_NAME" -- tee "$settings" > /dev/null <<'JSON'
+{
+  "statusLine": {
+    "type": "command",
+    "command": "/usr/local/bin/claude-statusline",
+    "refreshInterval": 30
+  }
+}
+JSON
+fi
+
 # ---- sshd ------------------------------------------------------------------------------------
 mkdir -p /run/sshd
 /usr/sbin/sshd -t

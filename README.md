@@ -186,6 +186,20 @@ pickled-claude exec claude rm -rf /home/claude/.claude/projects/-workspace
 Deleting the transcript of the conversation that is open right now confuses the running
 `claude`, so exit it first, or leave that one file alone.
 
+## Status line
+
+A new instance shows the model, context window use and the plan's 5-hour and weekly usage
+limits (with their reset times) below Claude's input, but no cost figure:
+
+```
+Opus 5.5 │ ctx 23% (46k/200k) │ 5h 12% ↻14:40 │ 7d 85% ↻Mon 08:00
+```
+
+On its first start, the entrypoint writes `.volume_config/settings.json` pointing `statusLine`
+at `/usr/local/bin/claude-statusline`. It does that only while there is no `settings.json`, so
+an instance that already has one (older instances included) keeps it as it is; add the
+`statusLine` block there by hand, or remove the `statusLine` block to get rid of it.
+
 ## Updating Claude Code
 
 Claude Code auto-updates itself inside the container (into the container layer). A rebuild
@@ -239,9 +253,9 @@ pickled-claude           wrapper: init / ssh / ls, everything else is docker com
 container/
   entrypoint.sh          sshd + tmux session + HTTP injector, writes /etc/claude-container.conf
   inject-server.py       HTTP API (python3 stdlib only)
-  bin/inject, peek, attach, start-claude-session
+  bin/inject, peek, attach, start-claude-session, claude-statusline
   sshd.conf, tmux.conf, profile.d/, bashrc-snippet.sh
-tests/                   shell tests: ./tests/start-claude-session.test.sh, ./tests/pickled-claude.test.sh
+tests/                   shell tests: ./tests/*.test.sh
 
 instance directory (the repository itself, or anywhere else):
   .env  authorized_keys  workspace/  .volume_config/  .volume_sessions/

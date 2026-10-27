@@ -75,8 +75,11 @@ firewall (see "Optional add-ons").
 1. Generate SSH host keys into the volume if missing.
 2. Assemble `~claude/.ssh/authorized_keys` from `/config/authorized_keys` and the optional
    `AUTHORIZED_KEYS` env var, fix permissions.
-3. Start `sshd -D -e` in the background.
-4. As user `claude` (with `INJECT_TOKEN` stripped from the environment so it is not visible to
+3. If `$CLAUDE_CONFIG_DIR/settings.json` does not exist yet (a new instance), create it with
+   a `statusLine` running `/usr/local/bin/claude-statusline` (model, context use, plan usage
+   limits, no cost). An existing file is never touched.
+4. Start `sshd -D -e` in the background.
+5. As user `claude` (with `INJECT_TOKEN` stripped from the environment so it is not visible to
    the Claude session): `start-claude-session` creates tmux session `claude`, window 1 with a
    login bash in `/workspace`, then types `claude $CLAUDE_ARGS` + Enter into it.
    When `claude` exits you get the shell back instead of a dead session; `attach` restarts
@@ -88,9 +91,9 @@ firewall (see "Optional add-ons").
    directory sits in `.volume_sessions/`. A first start finds no transcript and begins a
    new conversation; `CLAUDE_CONTINUE=0`, or an explicit `--continue`/`--resume` in
    `CLAUDE_ARGS`, takes the decision away from the script.
-5. As user `claude`: `inject-server.py` on `0.0.0.0:8080` (skipped with a loud warning when
+6. As user `claude`: `inject-server.py` on `0.0.0.0:8080` (skipped with a loud warning when
    `INJECT_TOKEN` is empty).
-6. `wait -n`; if sshd or the injector dies the container exits and compose restarts it.
+7. `wait -n`; if sshd or the injector dies the container exits and compose restarts it.
    Compose uses `init: true` for zombie reaping and a `tmux has-session` healthcheck.
 
 ### Attaching
@@ -236,10 +239,11 @@ pickled-claude/
     tmux.conf             -> /etc/tmux.conf
     profile.d/10-claude-env.sh, 99-tmux-autoattach.sh
     bashrc-snippet.sh     (history + env, appended to ~claude/.bashrc)
-    bin/inject, peek, attach, start-claude-session
+    bin/inject, peek, attach, start-claude-session, claude-statusline
   tests/
     start-claude-session.test.sh   which claude command lands in the tmux window
     pickled-claude.test.sh         wrapper: instance setup, compose/ssh invocations
+    claude-statusline.test.sh      what the status line shows, and that it never shows cost
 
 <instance>/               (any directory; the repository itself works too, all gitignored)
   .env  authorized_keys  workspace/
